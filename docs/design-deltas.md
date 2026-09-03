@@ -205,3 +205,27 @@ Authority comes from configuration rather than the model. A document root is
 named deliberately, so what it holds is taken as the user's own writing and
 records claim `explicit_user`; `document_authority` changes that for roots where
 it is not true.
+
+## Extraction checks its own coverage
+
+`mecp distill` parses a document mechanically, and `context_extract_rules` takes
+a model's judgement about the same document. Comparing the two catches an
+omission neither can find alone, and the first version left that comparison to
+whoever remembered to run both.
+
+Nobody remembers. During dogfooding a model kept the headline of a section,
+"ALWAYS use dedicated tools", and dropped the five-row table underneath naming
+Read over `cat`, Grep over `grep`, and Glob over `find`. The record was properly
+grounded, because the headline really is in the document, so the quote check
+passed. It was also toothless, and the agent it was later served to used `find`
+and `grep` anyway.
+
+So extraction now runs the parser over the document it just read and reports
+every line the document's own structure marks as a rule that no submitted quote
+covers. It reports rather than refuses, because skipping prose is usually right
+and skipping a table of specifics usually is not, and the caller is the one who
+can tell the difference.
+
+That moved the parser from `source` into the domain package, since `source`
+imports the domain and cannot be imported back. `mecp distill` and the coverage
+check now share one implementation rather than two that could drift.

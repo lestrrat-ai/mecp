@@ -222,6 +222,10 @@ Every rule must carry the exact text it came from in "quote", copied rather than
 paraphrased. The server checks each quote against the file and refuses any rule whose
 quote does not appear, so a rule you cannot quote is a rule you should not file.
 
+The result also lists any line the document presents as a rule that none of your quotes
+covers, so keeping a section's headline while dropping the table of specifics under it
+does not pass unnoticed. Either file those too, or say why they are not rules.
+
 A rule that checks out is stored as an active record straight away. One that needs a
 person is held instead: when the statement no longer resembles the line it came from,
 when an active record already says something different about the same subject, or when

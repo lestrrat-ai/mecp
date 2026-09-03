@@ -109,6 +109,13 @@ type BlockedRule struct {
 	Reason     string         `json:"reason"`
 }
 
+// UncoveredLine is a line the document's own structure marks as a rule that no
+// submitted quote accounts for.
+type UncoveredLine struct {
+	Line int    `json:"line"`
+	Text string `json:"text"`
+}
+
 // ExtractRulesResult is the outcome of one extraction.
 type ExtractRulesResult struct {
 	DocumentPath string         `json:"document_path"`
@@ -121,8 +128,12 @@ type ExtractRulesResult struct {
 	// ReviewCount is how many were held back for a person to look at.
 	ReviewCount int `json:"review_count"`
 	// PendingCount is how many were already waiting from an earlier run.
-	PendingCount int       `json:"pending_count"`
-	Warnings     []Warning `json:"warnings,omitempty"`
+	PendingCount int `json:"pending_count"`
+	// Uncovered lists lines the document presents as rules that no submitted
+	// quote covers. It is advice, not an accusation: skipping prose is often
+	// right, and skipping a table of specifics usually is not.
+	Uncovered []UncoveredLine `json:"uncovered,omitempty"`
+	Warnings  []Warning       `json:"warnings,omitempty"`
 }
 
 // ExtractRules turns rules a caller read out of an instruction document into
@@ -200,6 +211,16 @@ func (s *service) ExtractRules(ctx context.Context, req ExtractRulesRequest) (*E
 			Message: fmt.Sprintf(
 				"%d rule(s) were refused; see each one's reason and correct it rather than refiling as is",
 				len(result.Rejected)),
+		})
+	}
+	result.Uncovered = uncoveredLines(doc, req.Rules)
+	if len(result.Uncovered) > 0 {
+		result.Warnings = append(result.Warnings, Warning{
+			Code: WarnRecordNotFound,
+			Message: fmt.Sprintf(
+				"%d line(s) the document presents as rules are not covered by any quote you sent; "+
+					"file them or say why they do not belong",
+				len(result.Uncovered)),
 		})
 	}
 	if result.ReviewCount > 0 {
@@ -415,6 +436,44 @@ func describeFlags(flags []ReviewFlag) string {
 		parts = append(parts, string(f.Reason))
 	}
 	return strings.Join(parts, ", ")
+}
+
+// uncoveredLines reports what the document's own structure marks as a rule that
+// no submitted quote accounts for.
+//
+// This runs on every extraction rather than being something a caller remembers
+// to check. A model deciding what counts as a rule will sometimes keep a
+// section's headline and drop the table of specifics underneath it, and the
+// quote check cannot see that: the headline really is in the document, so the
+// record is properly grounded and merely toothless. Only comparing against the
+// whole document catches an omission.
+func uncoveredLines(doc *Document, rules []ExtractedRule) []UncoveredLine {
+	outline := (&Distiller{}).DistillContent(doc.Content, doc.Path, doc.ContentHash)
+	if len(outline.Lines) == 0 {
+		return nil
+	}
+
+	lines := strings.Split(doc.Content, "\n")
+	covered := make(map[int]struct{}, len(rules))
+	for _, rule := range rules {
+		if line := findQuote(lines, rule.Quote); line > 0 {
+			covered[line] = struct{}{}
+		}
+	}
+
+	var out []UncoveredLine
+	for i, line := range outline.Lines {
+		if _, ok := covered[line]; ok {
+			continue
+		}
+		text := ""
+		if line-1 < len(lines) {
+			text = strings.TrimSpace(lines[line-1])
+		}
+		out = append(out, UncoveredLine{Line: line, Text: text})
+		_ = i
+	}
+	return out
 }
 
 // findQuote returns the 1-based line where a quote begins, or zero when the

@@ -396,3 +396,76 @@ func TestExtractRulesAuthorization(t *testing.T) {
 		require.Equal(t, mecp.CodeInvalidRecord, mecp.CodeOf(err))
 	})
 }
+
+func TestExtractRulesReportsUncoveredLines(t *testing.T) {
+	// A section with a headline and a table underneath it. Keeping only the
+	// headline produces a grounded record that has lost its teeth, and the
+	// quote check cannot see that, because the headline really is there.
+	const doc = "# Shell\n" +
+		"\n" +
+		"## Dedicated Tools\n" +
+		"\n" +
+		"ALWAYS use dedicated tools. Bash is ONLY for commands with no tool equivalent.\n" +
+		"\n" +
+		"| Task | Use | NOT |\n" +
+		"|------|-----|-----|\n" +
+		"| Read files | `Read` tool | `cat` |\n" +
+		"| Find files | `Glob` tool | `find` |\n"
+
+	root := t.TempDir()
+	docPath := filepath.Join(root, "shell.md")
+	require.NoError(t, os.WriteFile(docPath, []byte(doc), 0o600))
+
+	store := newExtractStore(t)
+	svc, err := mecp.New(store,
+		mecp.WithClock(mecp.FixedClock{Time: testNow}),
+		mecp.WithDocumentReader(source.NewDocumentReader([]string{root})),
+	)
+	require.NoError(t, err)
+
+	res, err := svc.ExtractRules(t.Context(), mecp.ExtractRulesRequest{
+		Caller:       proposingCaller(),
+		DocumentPath: docPath,
+		Rules: []mecp.ExtractedRule{{
+			Kind:      mecp.KindConstraint,
+			Subject:   "dedicated tools",
+			Statement: "Always use the dedicated tool, and reserve Bash for commands with no tool equivalent.",
+			Quote:     "ALWAYS use dedicated tools. Bash is ONLY for commands with no tool equivalent.",
+		}},
+	})
+	require.NoError(t, err)
+
+	t.Run("the rule that was filed still goes through", func(t *testing.T) {
+		require.Equal(t, 1, res.ActivatedCount)
+	})
+
+	t.Run("the table rows are reported as uncovered", func(t *testing.T) {
+		require.Len(t, res.Uncovered, 2)
+		require.Contains(t, res.Uncovered[0].Text, "Read")
+		require.Contains(t, res.Uncovered[1].Text, "Glob")
+	})
+
+	t.Run("the omission is warned about rather than left silent", func(t *testing.T) {
+		require.NotEmpty(t, res.Warnings)
+	})
+
+	t.Run("covering everything reports nothing uncovered", func(t *testing.T) {
+		full, err := svc.ExtractRules(t.Context(), mecp.ExtractRulesRequest{
+			Caller:       proposingCaller(),
+			DocumentPath: docPath,
+			Rules: []mecp.ExtractedRule{
+				{Kind: mecp.KindConstraint, Subject: "dedicated tools",
+					Statement: "Always use the dedicated tool, and reserve Bash for commands with no tool equivalent.",
+					Quote:     "ALWAYS use dedicated tools. Bash is ONLY for commands with no tool equivalent."},
+				{Kind: mecp.KindConstraint, Subject: "dedicated tools",
+					Statement: "Read files with the Read tool rather than `cat`.",
+					Quote:     "| Read files | `Read` tool | `cat` |"},
+				{Kind: mecp.KindConstraint, Subject: "dedicated tools",
+					Statement: "Find files with the Glob tool rather than `find`.",
+					Quote:     "| Find files | `Glob` tool | `find` |"},
+			},
+		})
+		require.NoError(t, err)
+		require.Empty(t, full.Uncovered)
+	})
+}

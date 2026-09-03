@@ -8,7 +8,6 @@ import (
 
 	"github.com/goccy/go-yaml"
 	"github.com/lestrrat-ai/mecp"
-	"github.com/lestrrat-ai/mecp/source"
 	"github.com/urfave/cli/v3"
 )
 
@@ -73,7 +72,7 @@ func runDistill(_ context.Context, cmd *cli.Command) error {
 		return err
 	}
 
-	d := source.NewDistiller(cfg.Principal)
+	d := mecp.NewDistiller(cfg.Principal)
 	d.Authority = authority
 	d.Scope = scope
 

@@ -334,6 +334,14 @@ func describeExtraction(res *mecp.ExtractRulesResult) string {
 		b.WriteString("\nDo not refile these; they will be blocked again until the user acts.\n")
 	}
 
+	if len(res.Uncovered) > 0 {
+		fmt.Fprintf(&b, "\n%d line(s) the document presents as rules are not covered by any quote you sent:\n", len(res.Uncovered))
+		for _, u := range res.Uncovered {
+			fmt.Fprintf(&b, "- line %d: %s\n", u.Line, u.Text)
+		}
+		b.WriteString("File the ones that are rules, or say why they are not.\n")
+	}
+
 	if res.ReviewCount > 0 {
 		fmt.Fprintf(&b, "\n%d rule(s) were held rather than activated:\n", res.ReviewCount)
 		for _, a := range res.Accepted {

@@ -1,4 +1,4 @@
-package source
+package mecp
 
 import (
 	"bufio"
@@ -8,8 +8,6 @@ import (
 	"regexp"
 	"strings"
 	"time"
-
-	"github.com/lestrrat-ai/mecp"
 )
 
 // Distiller turns a Markdown instruction document into candidate records.
@@ -30,18 +28,20 @@ type Distiller struct {
 	// Authority is what the produced records claim. It defaults to
 	// sourced_import, because a parser cannot know whether the reader wrote the
 	// document it is reading.
-	Authority mecp.Authority
+	Authority Authority
 	// Scope is applied to every record from this document. One document
 	// normally covers one area, so a uniform scope is usually right, and
 	// guessing per-rule scope from prose is not.
-	Scope mecp.Scope
+	Scope Scope
 	// Now supplies timestamps. Zero means time.Now.
 	Now time.Time
 }
 
 // DistillResult is what one document produced, including what was skipped.
 type DistillResult struct {
-	Records []*mecp.Record
+	Records []*Record
+	// Lines gives the line each record came from, in the same order.
+	Lines []int
 	// Sections is how many headings held at least one rule.
 	Sections int
 	// SkippedParagraphs counts prose the parser did not try to interpret.
@@ -53,26 +53,25 @@ type DistillResult struct {
 
 // NewDistiller returns a distiller with conservative defaults.
 func NewDistiller(principal string) *Distiller {
-	return &Distiller{Principal: principal, Authority: mecp.AuthorityImport}
+	return &Distiller{Principal: principal, Authority: AuthorityImport}
 }
 
-// Distill reads one Markdown document.
+// Distill reads one Markdown document from disk.
 func (d *Distiller) Distill(path string) (*DistillResult, error) {
-	f, err := os.Open(path)
+	buf, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf(`failed to read %s: %w`, path, err)
-	}
-	defer f.Close()
-
-	hash, err := HashFile(path)
-	if err != nil {
-		return nil, err
 	}
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		abs = path
 	}
+	return d.DistillContent(string(buf), abs, HashContent(string(buf))), nil
+}
 
+// DistillContent reads a document already in memory, which is what the
+// extraction coverage check uses so that reading the file twice is unnecessary.
+func (d *Distiller) DistillContent(content, path, hash string) *DistillResult {
 	now := d.Now
 	if now.IsZero() {
 		now = time.Now().UTC()
@@ -80,24 +79,21 @@ func (d *Distiller) Distill(path string) (*DistillResult, error) {
 
 	p := &distillParser{
 		distiller: d,
-		locator:   "file://" + abs,
+		locator:   "file://" + path,
 		hash:      hash,
 		now:       now,
 		docTag:    tagFromFilename(path),
 	}
 
-	scanner := bufio.NewScanner(f)
+	scanner := bufio.NewScanner(strings.NewReader(content))
 	scanner.Buffer(nil, 1<<20)
 	for scanner.Scan() {
 		p.line++
 		p.consume(scanner.Text())
 	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf(`failed to read %s: %w`, path, err)
-	}
 	p.flushBullet()
 
-	return p.result(), nil
+	return p.result()
 }
 
 type distillParser struct {
@@ -116,7 +112,8 @@ type distillParser struct {
 	pending     []string
 	pendingLine int
 
-	records      []*mecp.Record
+	records      []*Record
+	recordLines  []int
 	sectionsSeen map[string]struct{}
 	skippedPara  int
 	skippedLines []int
@@ -280,18 +277,18 @@ func (p *distillParser) addWithSubject(subject, text string, line int) {
 	}
 	p.sectionsSeen[subject] = struct{}{}
 
-	rec := &mecp.Record{
-		ID:               mecp.NewID("rec"),
+	rec := &Record{
+		ID:               NewID("rec"),
 		Kind:             inferKind(text),
 		Subject:          subject,
 		Statement:        statement,
 		Scope:            p.distiller.Scope.Clone(),
 		Authority:        p.distiller.Authority,
-		ValidationPolicy: mecp.ValidateFileAndHash,
+		ValidationPolicy: ValidateFileAndHash,
 		Tags:             tagsFor(p.docTag),
-		Sources: []mecp.Source{{
-			ID:          mecp.NewID("src"),
-			Type:        mecp.SourceFile,
+		Sources: []Source{{
+			ID:          NewID("src"),
+			Type:        SourceFile,
 			Locator:     p.locator,
 			ContentHash: p.hash,
 			// The original wording, kept verbatim so a reviewer can see what
@@ -306,11 +303,13 @@ func (p *distillParser) addWithSubject(subject, text string, line int) {
 	}
 	rec.Normalize(p.now)
 	p.records = append(p.records, rec)
+	p.recordLines = append(p.recordLines, line)
 }
 
 func (p *distillParser) result() *DistillResult {
 	return &DistillResult{
 		Records:           p.records,
+		Lines:             p.recordLines,
 		Sections:          len(p.sectionsSeen),
 		SkippedParagraphs: p.skippedPara,
 		SkippedLines:      p.skippedLines,
@@ -348,19 +347,19 @@ var shoutedWords = []string{"NEVER", "ALWAYS", "MUST", "BANNED", "MANDATORY", "O
 // rather than anywhere in it where they usually describe rather than instruct.
 var commandingOpeners = []string{"never ", "do not ", "don't ", "only use ", "only ", "avoid "}
 
-func inferKind(text string) mecp.RecordKind {
+func inferKind(text string) RecordKind {
 	for _, w := range shoutedWords {
 		if strings.Contains(text, w) {
-			return mecp.KindConstraint
+			return KindConstraint
 		}
 	}
 	opening := strings.ToLower(strings.TrimSpace(checkboxPattern.ReplaceAllString(strings.TrimSpace(text), "")))
 	for _, w := range commandingOpeners {
 		if strings.HasPrefix(opening, w) {
-			return mecp.KindConstraint
+			return KindConstraint
 		}
 	}
-	return mecp.KindPreference
+	return KindPreference
 }
 
 func tagFromFilename(path string) string {

@@ -1,11 +1,11 @@
-package source_test
+package mecp_test
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/lestrrat-ai/mecp"
-	"github.com/lestrrat-ai/mecp/source"
 	"github.com/stretchr/testify/require"
 )
 
@@ -46,13 +46,14 @@ const sampleDoc = "# Before ANY Task\n" +
 func writeDoc(t *testing.T, body string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "CLAUDE.md")
-	return writeFile(t, filepath.Dir(path), "CLAUDE.md", body)
+	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+	return path
 }
 
 func TestDistill(t *testing.T) {
 	path := writeDoc(t, sampleDoc)
-	d := source.NewDistiller("lestrrat")
-	d.Now = testTime()
+	d := mecp.NewDistiller("lestrrat")
+	d.Now = testNow
 
 	res, err := d.Distill(path)
 	require.NoError(t, err)
@@ -132,8 +133,8 @@ func TestDistillKindInference(t *testing.T) {
 		"- Prefer interfaces over callbacks.\n"+
 		"- The parser always runs before the linter.\n")
 
-	d := source.NewDistiller("lestrrat")
-	d.Now = testTime()
+	d := mecp.NewDistiller("lestrrat")
+	d.Now = testNow
 	res, err := d.Distill(path)
 	require.NoError(t, err)
 
@@ -156,8 +157,8 @@ func TestDistillKindInference(t *testing.T) {
 func TestDistillProvenance(t *testing.T) {
 	path := writeDoc(t, "# Style\n\n- Do not use named return values.\n")
 
-	d := source.NewDistiller("lestrrat")
-	d.Now = testTime()
+	d := mecp.NewDistiller("lestrrat")
+	d.Now = testNow
 	d.Authority = mecp.AuthorityUser
 	d.Scope = mecp.Scope{PathPatterns: []string{"*.go"}}
 
@@ -183,9 +184,9 @@ func TestDistillProvenance(t *testing.T) {
 
 	t.Run("the source carries a hash so the record can go stale", func(t *testing.T) {
 		require.Equal(t, mecp.ValidateFileAndHash, rec.ValidationPolicy)
-		want, err := source.HashFile(path)
+		buf, err := os.ReadFile(path)
 		require.NoError(t, err)
-		require.Equal(t, want, rec.Sources[0].ContentHash)
+		require.Equal(t, mecp.HashContent(string(buf)), rec.Sources[0].ContentHash)
 	})
 
 	t.Run("every record is valid and importable", func(t *testing.T) {
@@ -198,14 +199,14 @@ func TestDistillRoundTripsThroughImport(t *testing.T) {
 	// at the handover.
 	path := writeDoc(t, "# Style\n\n- NEVER use named return values.\n- Prefer early returns.\n")
 
-	d := source.NewDistiller("lestrrat")
-	d.Now = testTime()
+	d := mecp.NewDistiller("lestrrat")
+	d.Now = testNow
 	res, err := d.Distill(path)
 	require.NoError(t, err)
 	require.Len(t, res.Records, 2)
 
 	ctx := t.Context()
-	store := newStore(t)
+	store := newExtractStore(t)
 	for _, rec := range res.Records {
 		require.NoError(t, store.PutRecord(ctx, rec))
 	}
