@@ -110,3 +110,24 @@ func TestRenderHookBlock(t *testing.T) {
 		require.Contains(t, got, "error wrapping")
 	})
 }
+
+func TestReadHookPayloadSession(t *testing.T) {
+	t.Run("reads the session identifier", func(t *testing.T) {
+		p, err := readHookPayload(strings.NewReader(
+			`{"prompt":"x","cwd":"/work","session_id":"7f3c1e2a-9b44-4d10-8c22-5f6a1b2c3d4e"}`))
+		require.NoError(t, err)
+		require.Equal(t, "7f3c1e2a-9b44-4d10-8c22-5f6a1b2c3d4e", p.SessionID)
+	})
+
+	t.Run("a payload without one still works", func(t *testing.T) {
+		p, err := readHookPayload(strings.NewReader(`{"prompt":"x","cwd":"/work"}`))
+		require.NoError(t, err)
+		require.Empty(t, p.SessionID)
+	})
+}
+
+func TestShortSession(t *testing.T) {
+	require.Equal(t, "-", shortSession(""))
+	require.Equal(t, "7f3c1e2a", shortSession("7f3c1e2a-9b44-4d10-8c22-5f6a1b2c3d4e"))
+	require.Equal(t, "abc", shortSession("abc"))
+}

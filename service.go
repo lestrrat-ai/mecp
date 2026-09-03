@@ -684,6 +684,7 @@ func (s *service) writeAudit(ctx context.Context, caller Caller, ev AuditEvent, 
 	ev.PrincipalID = caller.PrincipalID
 	ev.ClientID = caller.ClientID
 	ev.Origin = caller.Origin
+	ev.SessionID = caller.SessionID
 	// An audit failure must not fail the user's call; it is recorded locally
 	// and best-effort by design.
 	_ = s.audit.Write(ctx, ev)

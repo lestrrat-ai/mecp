@@ -49,10 +49,15 @@ const (
 	// OriginCLI marks a call the mecp command line made, including a
 	// diagnostic run that reproduces what an agent would be told.
 	OriginCLI Origin = "cli"
+	// OriginHook marks a call a host hook made on a session's behalf, before
+	// the model had a turn. It is distinct from OriginCLI because it says
+	// something different: not that a person ran a command, but that a session
+	// was handed context whether or not it asked.
+	OriginHook Origin = "hook"
 )
 
 // AllOrigins lists every origin in a stable order.
-var AllOrigins = []Origin{OriginMCP, OriginCLI}
+var AllOrigins = []Origin{OriginMCP, OriginCLI, OriginHook}
 
 func (o Origin) Valid() bool { return slices.Contains(AllOrigins, o) }
 
@@ -76,9 +81,13 @@ func (o Origin) String() string {
 // host sees, not a security control. That changes the day a socket or HTTP
 // endpoint appears, which is when authentication becomes mandatory.
 type Caller struct {
-	PrincipalID         string
-	ClientID            string
-	Origin              Origin
+	PrincipalID string
+	ClientID    string
+	Origin      Origin
+	// SessionID identifies the host session a call belongs to. One machine runs
+	// many sessions under one client profile, so without it the audit trail
+	// cannot say which of them did anything.
+	SessionID           string
 	Capabilities        []Capability
 	AllowedRepositories []string
 	AllowedRoots        []string

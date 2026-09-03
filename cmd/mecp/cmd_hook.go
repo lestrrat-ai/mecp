@@ -61,8 +61,9 @@ Install it as a UserPromptSubmit hook:
 // hookPayload is the part of the host's hook JSON this needs. Unknown fields are
 // ignored, so a host adding more does not break it.
 type hookPayload struct {
-	Prompt string `json:"prompt"`
-	CWD    string `json:"cwd"`
+	Prompt    string `json:"prompt"`
+	CWD       string `json:"cwd"`
+	SessionID string `json:"session_id"`
 }
 
 func runHook(ctx context.Context, cmd *cli.Command) error {
@@ -98,7 +99,12 @@ func injectContext(ctx context.Context, cmd *cli.Command) error {
 	}
 	defer rt.Close()
 
+	// One machine runs many sessions under one profile, so the audit trail
+	// records which session was handed this, and that it arrived through a hook
+	// rather than because a model asked.
 	caller := rt.cfg.Caller(cmd.String("client"))
+	caller.Origin = mecp.OriginHook
+	caller.SessionID = payload.SessionID
 	if err := caller.Validate(); err != nil {
 		return err
 	}

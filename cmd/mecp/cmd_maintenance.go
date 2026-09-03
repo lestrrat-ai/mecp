@@ -213,9 +213,9 @@ func runAudit(ctx context.Context, cmd *cli.Command) error {
 	// "mecp prepare --client ..." run that reproduces it. An event written
 	// before origins were recorded prints as "unknown".
 	for _, ev := range events {
-		fmt.Printf("%s  %-16s %-16s %-8s %d record(s) %dms %s\n",
+		fmt.Printf("%s  %-16s %-14s %-7s %-8s %d record(s) %dms %s\n",
 			ev.At.Format(time.RFC3339), ev.Operation, ev.ClientID, ev.Origin,
-			ev.ResultCount, ev.LatencyMS, ev.ErrorCode)
+			shortSession(ev.SessionID), ev.ResultCount, ev.LatencyMS, ev.ErrorCode)
 	}
 	return nil
 }
@@ -223,6 +223,18 @@ func runAudit(ctx context.Context, cmd *cli.Command) error {
 // auditReader opens a reader over whichever sink the configuration selects. A
 // nil reader means auditing is off. The returned function releases whatever was
 // opened, and is nil when nothing was.
+// shortSession trims a session identifier to something readable in a column,
+// which is enough to tell two sessions apart at a glance.
+func shortSession(id string) string {
+	if id == "" {
+		return "-"
+	}
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
+}
+
 func auditReader(ctx context.Context, cfg *config.Config) (mecp.AuditReader, func() error, error) {
 	switch cfg.Audit {
 	case "", "none":

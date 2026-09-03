@@ -31,6 +31,7 @@ type AuditEvent struct {
 	At           time.Time      `json:"at"`
 	PrincipalID  string         `json:"principal_id"`
 	ClientID     string         `json:"client_id"`
+	SessionID    string         `json:"session_id,omitempty"`
 	Origin       Origin         `json:"origin,omitempty"`
 	Operation    string         `json:"operation"`
 	Scope        EffectiveScope `json:"scope"`
