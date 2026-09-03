@@ -33,13 +33,23 @@ func (a *AuditSink) Write(ctx context.Context, ev mecp.AuditEvent) error {
 	return nil
 }
 
-// AuditEvents returns the most recent audit events, newest first.
-func (s *Store) AuditEvents(ctx context.Context, limit int) ([]mecp.AuditEvent, error) {
+// AuditEvents returns the most recent matching audit events, newest first.
+func (s *Store) AuditEvents(ctx context.Context, q mecp.AuditQuery) ([]mecp.AuditEvent, error) {
+	limit := q.Limit
 	if limit <= 0 {
-		limit = 50
+		limit = mecp.DefaultAuditLimit
 	}
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT payload FROM audit_events ORDER BY id DESC LIMIT ?`, limit)
+
+	query := `SELECT payload FROM audit_events`
+	args := []any{}
+	if !q.Since.IsZero() {
+		query += ` WHERE at >= ?`
+		args = append(args, formatTime(q.Since))
+	}
+	query += ` ORDER BY id DESC LIMIT ?`
+	args = append(args, limit)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf(`failed to read audit events: %w`, err)
 	}
@@ -60,4 +70,7 @@ func (s *Store) AuditEvents(ctx context.Context, limit int) ([]mecp.AuditEvent, 
 	return out, rows.Err()
 }
 
-var _ mecp.AuditSink = (*AuditSink)(nil)
+var (
+	_ mecp.AuditSink   = (*AuditSink)(nil)
+	_ mecp.AuditReader = (*Store)(nil)
+)

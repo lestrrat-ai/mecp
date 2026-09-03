@@ -50,6 +50,11 @@ read-only unless the client profile can propose, and a read-only store cannot
 accept the SQLite sink. Rather than silently dropping the audit trail, that
 configuration falls back to JSONL and says so on stderr.
 
+`mecp audit` reads back from whichever sink `audit:` selects, so the default
+installation is readable without opening the log file by hand. Because the
+fallback above can leave events in both places, a run against the SQLite sink
+says on stderr when the JSONL log is non-empty as well.
+
 ## Context handles are in-process
 
 The design describes a context-pack cache keyed by principal, client, revision,

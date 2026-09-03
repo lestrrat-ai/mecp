@@ -107,14 +107,19 @@ func auditSink(cfg *config.Config, store *sqlite.Store, readOnly bool) (mecp.Aud
 	case "sqlite":
 		return sqlite.NewAuditSink(store), nil
 	case "jsonl":
-		path := cfg.AuditLog
-		if path == "" {
-			path = config.DefaultAuditPath()
-		}
-		return mecp.NewJSONLAudit(path)
+		return mecp.NewJSONLAudit(auditLogPath(cfg))
 	default:
 		return nil, fmt.Errorf(`unknown audit sink %q`, cfg.Audit)
 	}
+}
+
+// auditLogPath is where the JSONL sink writes, which is also where anything
+// reading that sink has to look.
+func auditLogPath(cfg *config.Config) string {
+	if cfg.AuditLog != "" {
+		return cfg.AuditLog
+	}
+	return config.DefaultAuditPath()
 }
 
 // globalFlags are accepted by every command.
