@@ -131,3 +131,42 @@ func TestShortSession(t *testing.T) {
 	require.Equal(t, "7f3c1e2a", shortSession("7f3c1e2a-9b44-4d10-8c22-5f6a1b2c3d4e"))
 	require.Equal(t, "abc", shortSession("abc"))
 }
+
+func TestRenderHookBlockReportsTruncation(t *testing.T) {
+	pack := &mecp.ContextPack{
+		Items: []mecp.ContextItem{{Statement: "A rule.", Effect: mecp.EffectConstraint}},
+		Budget: mecp.BudgetReport{
+			RequestedTokens: 1500, EstimatedTokensUsed: 1492,
+			Truncated: true, OmittedItemCount: 11,
+		},
+	}
+
+	out := renderHookBlock(pack)
+
+	t.Run("says how many rules did not fit", func(t *testing.T) {
+		require.Contains(t, out, "11 further record(s) did not fit")
+	})
+
+	t.Run("says what to do about it", func(t *testing.T) {
+		require.Contains(t, out, "larger token_budget")
+	})
+
+	t.Run("a complete pack says nothing about budgets", func(t *testing.T) {
+		full := &mecp.ContextPack{
+			Items:  []mecp.ContextItem{{Statement: "A rule.", Effect: mecp.EffectConstraint}},
+			Budget: mecp.BudgetReport{RequestedTokens: 3000, EstimatedTokensUsed: 200},
+		}
+		require.NotContains(t, renderHookBlock(full), "did not fit")
+	})
+
+	t.Run("an unknown repository is surfaced", func(t *testing.T) {
+		unknown := &mecp.ContextPack{
+			Items: []mecp.ContextItem{{Statement: "A rule.", Effect: mecp.EffectConstraint}},
+			Warnings: []mecp.Warning{{
+				Code:    mecp.WarnUnknownRepository,
+				Message: "no record is scoped to this repository",
+			}},
+		}
+		require.Contains(t, renderHookBlock(unknown), "no record is scoped to this repository")
+	})
+}

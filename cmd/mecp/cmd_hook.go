@@ -50,7 +50,10 @@ Install it as a UserPromptSubmit hook:
   ]}]}}`,
 		Flags: append(globalFlags(),
 			&cli.StringFlag{Name: "client", Usage: "client profile to apply", Value: "default"},
-			&cli.IntFlag{Name: "budget", Usage: "approximate token budget for the injected block", Value: 1500},
+			&cli.IntFlag{
+				Name:  "budget",
+				Usage: "approximate token budget for the injected block; defaults to defaults.token_budget in the configuration",
+			},
 			&cli.DurationFlag{Name: "timeout", Usage: "give up and stay silent after this long", Value: defaultHookTimeout},
 			&cli.BoolFlag{Name: "verbose", Usage: "report failures on stderr instead of failing silently"},
 		),
@@ -109,6 +112,14 @@ func injectContext(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 
+	// The budget follows configuration rather than a number chosen here. A hook
+	// budget smaller than the store silently drops rules, and which rules it
+	// drops is decided by a ranker that cannot know what the turn needs.
+	budget := cmd.Int("budget")
+	if budget <= 0 {
+		budget = rt.cfg.Defaults.TokenBudget
+	}
+
 	pack, err := rt.svc.PrepareTask(ctx, mecp.PrepareTaskRequest{
 		Caller: caller,
 		Task:   task,
@@ -116,7 +127,7 @@ func injectContext(ctx context.Context, cmd *cli.Command) error {
 		// kind of work a prompt is, and a wrong kind hides records while an
 		// absent one does not.
 		Workspace:   hookWorkspace(payload.CWD, task),
-		TokenBudget: cmd.Int("budget"),
+		TokenBudget: budget,
 	})
 	if err != nil {
 		return err
@@ -261,8 +272,17 @@ func renderHookBlock(pack *mecp.ContextPack) string {
 	for _, c := range pack.Conflicts {
 		fmt.Fprintf(&b, "Conflict on %q: %s\n", c.Subject, c.Explanation)
 	}
+	// Truncation is reported, not hidden. An agent given half the rules and no
+	// word of it cannot tell a rule that does not exist from one that did not
+	// fit, and will act as though the missing half was never written.
+	if pack.Budget.Truncated {
+		fmt.Fprintf(&b, "Warning: %d further record(s) did not fit this budget and are not shown. "+
+			"Call context_prepare_task with a larger token_budget if this task needs more.\n",
+			pack.Budget.OmittedItemCount)
+	}
 	for _, w := range pack.Warnings {
-		if w.Code == mecp.WarnStaleRecord || w.Code == mecp.WarnConflict {
+		switch w.Code {
+		case mecp.WarnStaleRecord, mecp.WarnConflict, mecp.WarnUnknownRepository:
 			fmt.Fprintf(&b, "Warning: %s\n", w.Message)
 		}
 	}
