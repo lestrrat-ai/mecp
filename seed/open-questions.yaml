@@ -1,0 +1,26 @@
+# An open question is not a decision, and must never be returned as one. Keeping
+# it as its own kind is what stops an agent from acting on a direction nobody
+# has actually chosen yet.
+records:
+  - kind: open_question
+    subject: error wrapping strategy
+    statement: >
+      Whether errors should be wrapped at every layer boundary or propagate
+      unwrapped for sentinel comparison is still undecided.
+    rationale: >
+      Both approaches have been argued in review. No decision has been recorded.
+    scope:
+      repository: https://github.com/example/your-project
+    tags: [errors, api-design]
+
+  - kind: project_fact
+    subject: minimum Go version
+    statement: The project targets the two most recent Go releases.
+    rationale: >
+      Stated in the README and enforced in CI. Recorded here so an agent does not
+      propose a language feature that will not build.
+    scope:
+      repository: https://github.com/example/your-project
+    tags: [toolchain]
+    validation_policy: review_after
+    review_after: 2027-01-01T00:00:00Z

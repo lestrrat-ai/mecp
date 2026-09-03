@@ -1,0 +1,29 @@
+# A decision plus the rejected alternative it displaced. Recording both is what
+# stops the alternative from being proposed again every few months.
+records:
+  - kind: decision
+    subject: release conformance testing
+    statement: >
+      The release process runs the conformance-test repository against a
+      controlled commit chosen at release time.
+    rationale: >
+      Reproducibility comes from pinning the commit deliberately. A release must
+      not change behaviour because an upstream suite moved overnight.
+    scope:
+      repository: https://github.com/example/your-project
+      task_kinds: [release, code_review]
+    tags: [conformance, release, testing]
+    validation_policy: none
+
+  - kind: rejected_alternative
+    subject: release conformance testing
+    statement: >
+      Automatically tracking the upstream conformance suite was considered and
+      rejected.
+    rationale: >
+      It makes a release non-reproducible: the same tag would pass or fail
+      depending on when it was built.
+    scope:
+      repository: https://github.com/example/your-project
+      task_kinds: [release, code_review]
+    tags: [conformance, release]

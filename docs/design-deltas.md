@@ -1,0 +1,89 @@
+# Where the implementation departs from the design
+
+The design document is
+[agent-context-broker-design.md](../agent-context-broker-design.md). This file
+records every place the code does something other than what that document
+says, and why. Anything not listed here follows the design.
+
+## Tool names use underscores, not dots
+
+The design names the tools `context.prepare_task`, `context.search`,
+`context.get_records`, and `context.propose_record`. The implementation uses
+`context_prepare_task` and so on.
+
+Several agent hosts pass an MCP tool name straight into a function-calling API
+whose name grammar is `[A-Za-z0-9_-]{1,64}`; OpenAI's is one of them, and Codex
+is a named target host. A dot makes the tool unusable there, silently. The
+names are otherwise identical, and `mcpserver/server_test.go` asserts that
+every advertised name stays inside that grammar.
+
+## Configuration is YAML, not TOML
+
+The design's suggested filesystem layout names `config.toml`. The
+implementation reads `config.yaml`.
+
+Record source files are already YAML, so this keeps one serialization format
+and one dependency instead of two. The layout is otherwise as designed:
+platform config, data, and state directories, under `mecp/`.
+
+## An unsupplied task kind is unknown, not "other"
+
+The design's input schema gives `task_kind` a default of `other`. In the
+implementation, an omitted `task_kind` stays empty and the task-kind dimension
+of a scope is simply not evaluated: a record scoped to `release` still applies,
+but earns no specificity bonus for it.
+
+Defaulting to `other` meant that any host which omitted the field could never
+see a task-scoped record, because `other` matches no declared task kind. That
+turned an optional field into a silent filter. An explicitly stated `other` is
+still a claim about the work and is matched strictly.
+
+## Audit events go to JSONL by default, with a SQLite table available
+
+The design lists `audit_events` in the relational schema and `audit.jsonl` in
+the filesystem layout. Both exist. The table is created by the migration and
+backs `sqlite.AuditSink`; the default is the JSONL file, selected by `audit:` in
+the configuration.
+
+The default matters for the agent-facing process: it opens the database
+read-only unless the client profile can propose, and a read-only store cannot
+accept the SQLite sink. Rather than silently dropping the audit trail, that
+configuration falls back to JSONL and says so on stderr.
+
+## Context handles are in-process
+
+The design describes a context-pack cache keyed by principal, client, revision,
+task, budget, database content version, and ranker version. The implementation
+issues context handles from an in-memory map with a TTL, and does not yet cache
+the packs themselves. `Store.ContentVersion` and `Ranker.Version` exist and are
+what such a cache would key on.
+
+Each MCP process is short-lived and per-client, so a handle does not need to
+outlive it. Nothing about the tool contract changes when a real cache is added.
+
+## Semantic retrieval is absent
+
+The design makes embeddings an optional supplementary ranking signal, after
+structured filters and FTS. None are implemented. The retrieval pipeline is
+structured filtering, FTS5, and a deterministic ranker.
+
+This is the design's stated priority order, not a departure from it — noted
+here only because it is the most visible unimplemented option.
+
+## Not built in this pass
+
+These are named in the design and deliberately left out of the initial version.
+
+- **Daemon mode and Streamable HTTP.** Milestone 6, gated on measurements that
+  do not exist yet. `mecp mcp` refuses any transport but stdio rather than
+  pretending.
+- **Remote access and signed context capsules.** Excluded from the MVP by the
+  design itself.
+- **Conversation and issue-tracker adapters.** The file importer and the Git
+  validator are in; chat exports, GitHub issues, and agent-memory imports are
+  not.
+- **Model-assisted distillation.** Extraction from source material into
+  candidate proposals is manual for now. The proposal and review machinery it
+  would feed is complete.
+- **A local review UI.** `mecp review` shows the proposed statement beside the
+  quoted evidence, which is the side-by-side comparison the design asks for.

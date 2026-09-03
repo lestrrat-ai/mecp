@@ -1,0 +1,11 @@
+# Build output
+/mecp
+/dist/
+
+# Agent/scratch working directories
+/.tmp/
+/.worktrees/
+
+# Go test artifacts
+*.test
+*.out

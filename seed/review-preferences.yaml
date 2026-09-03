@@ -1,0 +1,27 @@
+# Review preferences. Note that these are scoped to review tasks and to a
+# condition, rather than being stated as universal truths: a preference that
+# only holds for pre-v1 libraries should not surface while shipping a service.
+records:
+  - kind: preference
+    subject: pre-v1 review weighting
+    statement: >
+      For production-readiness reviews of a pre-v1 library, weight implementation
+      correctness above API compatibility.
+    rationale: >
+      The API is still expected to move before v1, so an incompatibility is a
+      cost the project has already accepted. A correctness defect is not.
+    scope:
+      task_kinds: [code_review, security_review]
+      conditions:
+        repository_type: library
+    tags: [review, api-stability]
+
+  - kind: preference
+    subject: review target
+    statement: Review the current branch rather than the latest released version.
+    rationale: >
+      Released versions are frozen. Feedback is only actionable against the code
+      that is about to change.
+    scope:
+      task_kinds: [code_review]
+    tags: [review]
