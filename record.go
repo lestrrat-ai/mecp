@@ -147,11 +147,16 @@ func (s RecordStatus) Guidance() bool { return s == StatusActive }
 type ValidationPolicy string
 
 const (
-	ValidateNone         ValidationPolicy = "none"
-	ValidateEvidence     ValidationPolicy = "evidence_exists"
-	ValidateContentHash  ValidationPolicy = "content_hash_matches"
-	ValidateGitAncestor  ValidationPolicy = "git_revision_ancestor"
-	ValidateFileAndHash  ValidationPolicy = "file_path_and_hash"
+	ValidateNone        ValidationPolicy = "none"
+	ValidateEvidence    ValidationPolicy = "evidence_exists"
+	ValidateContentHash ValidationPolicy = "content_hash_matches"
+	ValidateGitAncestor ValidationPolicy = "git_revision_ancestor"
+	ValidateFileAndHash ValidationPolicy = "file_path_and_hash"
+	// ValidateQuotePresent keeps a record fresh while the exact text it was
+	// drawn from is still in its source file. It suits a rule extracted from a
+	// document, where hashing the whole file would mark every rule stale
+	// whenever any one of them was edited.
+	ValidateQuotePresent ValidationPolicy = "quote_present"
 	ValidateReviewAfter  ValidationPolicy = "review_after"
 	ValidateManualReview ValidationPolicy = "manual"
 )
@@ -163,6 +168,7 @@ var AllValidationPolicies = []ValidationPolicy{
 	ValidateContentHash,
 	ValidateGitAncestor,
 	ValidateFileAndHash,
+	ValidateQuotePresent,
 	ValidateReviewAfter,
 	ValidateManualReview,
 }

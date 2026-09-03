@@ -258,3 +258,26 @@ Extraction therefore archives any record drawn from that document whose quoted
 line is no longer in it, and reports which ones. They are archived rather than
 deleted, so what the document used to say remains readable as history, and only
 records from the document being extracted are touched.
+
+## An extracted rule is checked line by line, not file by file
+
+`file_path_and_hash` compares the hash of a whole document, which is right for a
+record drawn from a single artifact and wrong for one of thirty rules drawn from
+one file. Editing any single line marked all thirty stale, and during dogfooding
+that demoted an entire document's worth of rules to informational while the
+document was being revised.
+
+Extraction therefore uses `quote_present`, which asks only whether the text a
+record was drawn from is still in its file. Whitespace and Markdown markers are
+normalized on both sides, so re-indenting a line or changing its bullet marker
+does not break the record. Editing one rule now says nothing about the others,
+which is the truth of the matter.
+
+## A rule whose line is gone is deleted, not archived
+
+Retirement removes the record instead of archiving it. The design keeps
+superseded records so a decision's history can be reconstructed, and that holds
+for records mecp is the only home for. It does not hold for a rule extracted
+from a document under version control: what the document used to say is already
+in its own history, and a second copy here only fills every listing with rules
+that no longer exist.

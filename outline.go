@@ -284,7 +284,7 @@ func (p *distillParser) addWithSubject(subject, text string, line int) {
 		Statement:        statement,
 		Scope:            p.distiller.Scope.Clone(),
 		Authority:        p.distiller.Authority,
-		ValidationPolicy: ValidateFileAndHash,
+		ValidationPolicy: ValidateQuotePresent,
 		Tags:             tagsFor(p.docTag),
 		Sources: []Source{{
 			ID:          NewID("src"),

@@ -125,6 +125,29 @@ func (r *GitResolver) ContentHash(_ context.Context, src mecp.Source, ws mecp.Wo
 	return HashFile(path)
 }
 
+// Contains reports whether a source's file still holds the given text.
+// Whitespace and Markdown markers are normalized on both sides, because a rule
+// survives its line being re-indented or its bullet marker changing.
+func (r *GitResolver) Contains(_ context.Context, src mecp.Source, ws mecp.Workspace, text string) (bool, error) {
+	path, err := r.resolvePath(src.Locator, ws)
+	if err != nil {
+		return false, err
+	}
+	buf, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf(`failed to read %s: %w`, path, err)
+	}
+	return strings.Contains(normalizeForSearch(string(buf)), normalizeForSearch(text)), nil
+}
+
+func normalizeForSearch(s string) string {
+	replacer := strings.NewReplacer("`", " ", "*", " ", "|", " ", "#", " ", ">", " ", "-", " ")
+	return strings.Join(strings.Fields(strings.ToLower(replacer.Replace(s))), " ")
+}
+
 // RevisionApplies reports whether the source's revision is an ancestor of, or
 // equal to, the workspace revision. A decision recorded against a commit that
 // is not in the current history describes a different line of development.

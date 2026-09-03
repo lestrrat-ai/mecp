@@ -217,7 +217,7 @@ func (s *service) ExtractRules(ctx context.Context, req ExtractRulesRequest) (*E
 				len(result.Rejected)),
 		})
 	}
-	retired, err := s.retireVanishedRules(ctx, doc, now)
+	retired, err := s.retireVanishedRules(ctx, doc)
 	if err != nil {
 		return nil, err
 	}
@@ -226,7 +226,7 @@ func (s *service) ExtractRules(ctx context.Context, req ExtractRulesRequest) (*E
 		result.Warnings = append(result.Warnings, Warning{
 			Code: WarnSupersededRecord,
 			Message: fmt.Sprintf(
-				"%d record(s) from this document quoted lines it no longer contains, and were archived",
+				"%d record(s) from this document quoted lines it no longer contains, and were removed",
 				len(retired)),
 			RecordIDs: retired,
 		})
@@ -337,7 +337,7 @@ func (s *service) extractOne(ctx context.Context, req ExtractRulesRequest, rule 
 		ContentHash:      doc.ContentHash,
 		ExactExcerpt:     fmt.Sprintf("line %d: %s", line, quote),
 		CapturedAt:       now,
-		ValidationPolicy: ValidateFileAndHash,
+		ValidationPolicy: ValidateQuotePresent,
 	}
 
 	// The key is the document and the quote, normalized the same way the quote
@@ -354,7 +354,7 @@ func (s *service) extractOne(ctx context.Context, req ExtractRulesRequest, rule 
 		Scope:            scope,
 		Authority:        req.Authority,
 		Status:           StatusActive,
-		ValidationPolicy: ValidateFileAndHash,
+		ValidationPolicy: ValidateQuotePresent,
 		Tags:             slices.Clone(rule.Tags),
 		Sources:          []Source{evidence},
 	}
@@ -465,14 +465,15 @@ func describeFlags(flags []ReviewFlag) string {
 	return strings.Join(parts, ", ")
 }
 
-// retireVanishedRules archives records drawn from this document whose quoted
+// retireVanishedRules deletes records drawn from this document whose quoted
 // line is no longer in it.
 //
 // Editing a document gives its rules new quotes and therefore new records, and
 // without this the old ones stay active while pointing at text that is gone.
-// They are archived rather than deleted, so the history of what the document
-// used to say survives.
-func (s *service) retireVanishedRules(ctx context.Context, doc *Document, now time.Time) ([]string, error) {
+// They are deleted rather than archived, because the document is the source of
+// truth and its own history already records what it used to say. Keeping a
+// second copy here only clutters every listing with rules that no longer exist.
+func (s *service) retireVanishedRules(ctx context.Context, doc *Document) ([]string, error) {
 	existing, err := s.store.QueryRecords(ctx, RecordQuery{
 		Statuses: []RecordStatus{StatusActive},
 		Limit:    maxExtractedRules * 4,
@@ -493,10 +494,8 @@ func (s *service) retireVanishedRules(ctx context.Context, doc *Document, now ti
 		if findQuote(lines, quote) > 0 {
 			continue
 		}
-		rec.Status = StatusArchived
-		rec.UpdatedAt = now
-		if err := s.store.PutRecord(ctx, rec); err != nil {
-			return nil, wrapf(CodeStorage, err, "cannot archive record %s", rec.ID)
+		if err := s.store.DeleteRecord(ctx, rec.ID); err != nil {
+			return nil, wrapf(CodeStorage, err, "cannot remove record %s", rec.ID)
 		}
 		retired = append(retired, rec.ID)
 	}

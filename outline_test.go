@@ -183,7 +183,7 @@ func TestDistillProvenance(t *testing.T) {
 	})
 
 	t.Run("the source carries a hash so the record can go stale", func(t *testing.T) {
-		require.Equal(t, mecp.ValidateFileAndHash, rec.ValidationPolicy)
+		require.Equal(t, mecp.ValidateQuotePresent, rec.ValidationPolicy)
 		buf, err := os.ReadFile(path)
 		require.NoError(t, err)
 		require.Equal(t, mecp.HashContent(string(buf)), rec.Sources[0].ContentHash)

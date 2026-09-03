@@ -113,11 +113,13 @@ func TestExtractRulesActivates(t *testing.T) {
 		require.Equal(t, mecp.AuthorityUser, rec.Authority)
 	})
 
-	t.Run("it is revalidated against the document it came from", func(t *testing.T) {
+	t.Run("it is revalidated against the line it came from", func(t *testing.T) {
 		store := extractStore(t, svc)
 		rec, err := store.GetRecord(t.Context(), res.Accepted[0].RecordID)
 		require.NoError(t, err)
-		require.Equal(t, mecp.ValidateFileAndHash, rec.ValidationPolicy)
+		// Per-rule rather than per-file: editing some other rule in the same
+		// document must not demote this one.
+		require.Equal(t, mecp.ValidateQuotePresent, rec.ValidationPolicy)
 		require.Equal(t, mecp.HashContent(rulesDoc), rec.Sources[0].ContentHash)
 	})
 
@@ -574,15 +576,15 @@ func TestExtractRulesRetiresVanishedRules(t *testing.T) {
 		require.NotEqual(t, gone, second.Accepted[0].RecordID)
 	})
 
-	t.Run("the record quoting the vanished line is archived", func(t *testing.T) {
+	t.Run("the record quoting the vanished line is removed", func(t *testing.T) {
 		require.Contains(t, second.Retired, gone)
 
-		rec, err := store.GetRecord(t.Context(), gone)
-		require.NoError(t, err)
-		require.Equal(t, mecp.StatusArchived, rec.Status)
+		_, err := store.GetRecord(t.Context(), gone)
+		require.ErrorIs(t, err, mecp.ErrNotFound,
+			"the document's own history records what it used to say, so a second copy here is clutter")
 	})
 
-	t.Run("the archiving is reported rather than silent", func(t *testing.T) {
+	t.Run("the removal is reported rather than silent", func(t *testing.T) {
 		require.NotEmpty(t, second.Warnings)
 	})
 

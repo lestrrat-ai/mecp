@@ -49,6 +49,8 @@ type SourceResolver interface {
 	// RevisionApplies reports whether the source's revision is an ancestor of,
 	// or equal to, the workspace revision.
 	RevisionApplies(ctx context.Context, src Source, ws Workspace) (bool, error)
+	// Contains reports whether a source's file still holds the given text.
+	Contains(ctx context.Context, src Source, ws Workspace, text string) (bool, error)
 }
 
 // Validator decides whether a record may still be presented as current.
@@ -94,6 +96,8 @@ func (v *policyValidator) Validate(ctx context.Context, rec *Record, ws Workspac
 		if st.State.Trusted() {
 			st = v.checkHashes(ctx, rec, ws, st)
 		}
+	case ValidateQuotePresent:
+		st = v.checkQuotes(ctx, rec, ws, st)
 	case ValidateGitAncestor:
 		st = v.checkRevision(ctx, rec, ws, st)
 	default:
@@ -185,6 +189,54 @@ func (v *policyValidator) checkHashes(ctx context.Context, rec *Record, ws Works
 		st.Reason = "policy requires content hashes but none are recorded"
 	}
 	return st
+}
+
+// checkQuotes asks only whether each source's own text is still there. A
+// document holds many rules, and one of them changing says nothing about the
+// others, so this is what keeps an edit from demoting a whole file's worth.
+func (v *policyValidator) checkQuotes(ctx context.Context, rec *Record, ws Workspace, st ValidationStatus) ValidationStatus {
+	if v.resolver == nil {
+		st.State = ValidationUnverified
+		st.Reason = "no source resolver is configured"
+		return st
+	}
+
+	var checked int
+	for _, src := range rec.Sources {
+		text := quotedText(src)
+		if text == "" {
+			continue
+		}
+		ok, err := v.resolver.Contains(ctx, src, ws, text)
+		if err != nil {
+			st.State = ValidationUnverified
+			st.Reason = "source " + src.ID + " could not be checked: " + err.Error()
+			return st
+		}
+		checked++
+		if !ok {
+			st.State = ValidationStale
+			st.Reason = "source " + src.ID + " no longer contains the text this record was drawn from"
+			return st
+		}
+	}
+	if checked == 0 {
+		st.State = ValidationUnverified
+		st.Reason = "policy requires quoted evidence but none is recorded"
+	}
+	return st
+}
+
+// quotedText strips the line prefix an extraction adds, leaving the original
+// text to look for.
+func quotedText(src Source) string {
+	quote := src.ExactExcerpt
+	if rest, found := strings.CutPrefix(quote, "line "); found {
+		if _, after, ok := strings.Cut(rest, ": "); ok {
+			return after
+		}
+	}
+	return quote
 }
 
 func (v *policyValidator) checkRevision(ctx context.Context, rec *Record, ws Workspace, st ValidationStatus) ValidationStatus {
