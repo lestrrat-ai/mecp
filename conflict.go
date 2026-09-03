@@ -107,6 +107,11 @@ func conflictEligible(c *Candidate) bool {
 // membersDisagree reports whether a group holds at least two materially
 // different statements. Near-identical wording is redundancy, which the ranker
 // already handles, not a disagreement worth interrupting the agent about.
+//
+// Two records extracted from one document are also not a disagreement. A
+// heading covers several rules, so grouping by subject puts siblings together,
+// and a document saying five things about killing processes is not a document
+// contradicting itself.
 func membersDisagree(members []*Candidate) bool {
 	for i := 0; i < len(members); i++ {
 		for j := i + 1; j < len(members); j++ {
@@ -114,9 +119,32 @@ func membersDisagree(members []*Candidate) bool {
 			if slices.Contains(a.Supersedes, b.ID) || slices.Contains(b.Supersedes, a.ID) {
 				continue
 			}
+			if shareASource(a, b) {
+				continue
+			}
 			if statementSimilarity(a.Statement, b.Statement) < 0.8 {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// shareASource reports whether two records were drawn from the same artifact,
+// which makes them siblings rather than rivals.
+func shareASource(a, b *Record) bool {
+	if len(a.Sources) == 0 || len(b.Sources) == 0 {
+		return false
+	}
+	locators := make(map[string]struct{}, len(a.Sources))
+	for _, src := range a.Sources {
+		if src.Locator != "" {
+			locators[src.Locator] = struct{}{}
+		}
+	}
+	for _, src := range b.Sources {
+		if _, ok := locators[src.Locator]; ok {
+			return true
 		}
 	}
 	return false

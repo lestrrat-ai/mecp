@@ -384,6 +384,58 @@ func TestPrepareTaskLifecycle(t *testing.T) {
 		require.Contains(t, warningCodes(pack.Warnings), mecp.WarnConflict)
 	})
 
+	t.Run("rules from one document are not reported as conflicting", func(t *testing.T) {
+		// A heading covers several rules, so grouping by subject puts siblings
+		// together. Reporting those as a conflict fills every context pack with
+		// warnings about a document disagreeing with itself.
+		doc := mecp.Source{ID: "src_shell", Type: mecp.SourceFile, Locator: "file:///docs/shell.md"}
+		first := &mecp.Record{
+			ID: "rec_kill_a", Kind: mecp.KindConstraint, Subject: "killing processes",
+			Statement: "Never run pkill or killall.",
+			Scope:     mecp.Scope{Repository: heliumRepo},
+			Authority: mecp.AuthorityUser,
+			Sources:   []mecp.Source{doc},
+		}
+		second := &mecp.Record{
+			ID: "rec_kill_b", Kind: mecp.KindConstraint, Subject: "killing processes",
+			Statement: "Use kill <PID> only for a process you started in this session.",
+			Scope:     mecp.Scope{Repository: heliumRepo},
+			Authority: mecp.AuthorityUser,
+			Sources:   []mecp.Source{doc},
+		}
+		svc, _ := newService(t, first, second)
+
+		pack, err := svc.PrepareTask(t.Context(), mecp.PrepareTaskRequest{
+			Caller: agentCaller(), Task: "Stop a stuck process", Workspace: heliumWorkspace(),
+		})
+		require.NoError(t, err)
+		require.Empty(t, pack.Conflicts)
+		require.NotContains(t, warningCodes(pack.Warnings), mecp.WarnConflict)
+	})
+
+	t.Run("records from different sources still conflict", func(t *testing.T) {
+		fromDoc := &mecp.Record{
+			ID: "rec_doc", Kind: mecp.KindDecision, Subject: "error wrapping",
+			Statement: "Errors are wrapped at every layer boundary.",
+			Scope:     mecp.Scope{Repository: heliumRepo},
+			Authority: mecp.AuthorityUser,
+			Sources:   []mecp.Source{{ID: "s1", Type: mecp.SourceFile, Locator: "file:///docs/go.md"}},
+		}
+		handWritten := &mecp.Record{
+			ID: "rec_hand", Kind: mecp.KindDecision, Subject: "error wrapping",
+			Statement: "Errors propagate unwrapped so sentinel comparison keeps working.",
+			Scope:     mecp.Scope{Repository: heliumRepo},
+			Authority: mecp.AuthorityProject,
+		}
+		svc, _ := newService(t, fromDoc, handWritten)
+
+		pack, err := svc.PrepareTask(t.Context(), mecp.PrepareTaskRequest{
+			Caller: agentCaller(), Task: "Fix error handling", Workspace: heliumWorkspace(),
+		})
+		require.NoError(t, err)
+		require.Len(t, pack.Conflicts, 1)
+	})
+
 	t.Run("deterministic for the same inputs", func(t *testing.T) {
 		svc, _ := newService(t, reviewPreference(), stylesheetConstraint())
 		req := mecp.PrepareTaskRequest{
