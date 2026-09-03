@@ -2,6 +2,7 @@ package mecp
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -432,6 +433,14 @@ func (s *service) collect(ctx context.Context, req collectRequest) ([]*Candidate
 		return nil, nil, err
 	}
 
+	unknown, err := s.unknownRepositoryWarning(ctx, req.Repository)
+	if err != nil {
+		return nil, nil, err
+	}
+	if unknown != nil {
+		warnings = append(warnings, *unknown)
+	}
+
 	s.ranker.Rank(RankRequest{
 		Query:     req.Text,
 		TaskKind:  req.TaskKind,
@@ -440,6 +449,39 @@ func (s *service) collect(ctx context.Context, req collectRequest) ([]*Candidate
 	}, applicable)
 
 	return applicable, warnings, nil
+}
+
+// unknownRepositoryWarning reports a repository the store has never seen. An
+// empty result is otherwise indistinguishable from having nothing stored, which
+// hides the most likely cause: the caller named the repository differently from
+// however the records were written.
+//
+// Nothing is reported when no record is scoped to any repository, because then
+// the store genuinely has nothing to say and the caller is not being misled.
+func (s *service) unknownRepositoryWarning(ctx context.Context, repository string) (*Warning, error) {
+	if repository == "" {
+		return nil, nil
+	}
+	known, err := s.store.KnownRepositories(ctx)
+	if err != nil {
+		return nil, wrapf(CodeStorage, err, "cannot list known repositories")
+	}
+	if len(known) == 0 || slices.Contains(known, repository) {
+		return nil, nil
+	}
+	return &Warning{
+		Code: WarnUnknownRepository,
+		Message: fmt.Sprintf(
+			"no record is scoped to %s, though %d other repositor%s stored; check that the repository is named the way the records were written",
+			repository, len(known), pluralVerb(len(known))),
+	}, nil
+}
+
+func pluralVerb(n int) string {
+	if n == 1 {
+		return "y is"
+	}
+	return "ies are"
 }
 
 // annotate fills in supersession, freshness, and effect for every candidate,

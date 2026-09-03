@@ -182,6 +182,39 @@ func TestSearchRecords(t *testing.T) {
 	})
 }
 
+func TestKnownRepositories(t *testing.T) {
+	store := newStore(t)
+	ctx := t.Context()
+
+	for _, rec := range []*mecp.Record{
+		mustRecord(t, &mecp.Record{
+			ID: "rec_a", Kind: mecp.KindConstraint, Subject: "a", Statement: "A.",
+			Scope: mecp.Scope{Repository: "git@github.com:lestrrat-go/helium.git"}, Authority: mecp.AuthorityUser,
+		}),
+		mustRecord(t, &mecp.Record{
+			ID: "rec_b", Kind: mecp.KindConstraint, Subject: "b", Statement: "B.",
+			Scope: mecp.Scope{Repository: "https://github.com/lestrrat-go/helium"}, Authority: mecp.AuthorityUser,
+		}),
+		mustRecord(t, &mecp.Record{
+			ID: "rec_c", Kind: mecp.KindConstraint, Subject: "c", Statement: "C.",
+			Scope: mecp.Scope{Repository: "https://github.com/example/billing"}, Authority: mecp.AuthorityUser,
+		}),
+		mustRecord(t, &mecp.Record{
+			ID: "rec_d", Kind: mecp.KindPreference, Subject: "d", Statement: "D.",
+			Authority: mecp.AuthorityUser,
+		}),
+	} {
+		require.NoError(t, store.PutRecord(ctx, rec))
+	}
+
+	got, err := store.KnownRepositories(ctx)
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		"https://github.com/example/billing",
+		"https://github.com/lestrrat-go/helium",
+	}, got, "two spellings of one repository count once, and a global record contributes none")
+}
+
 func TestSupersession(t *testing.T) {
 	store := newStore(t)
 	ctx := t.Context()

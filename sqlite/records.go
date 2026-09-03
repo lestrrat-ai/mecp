@@ -538,3 +538,26 @@ func orEmptyMap(in map[string]string) map[string]string {
 
 // IsNotFound reports whether err means the addressed row does not exist.
 func IsNotFound(err error) bool { return errors.Is(err, mecp.ErrNotFound) }
+
+// KnownRepositories returns every canonical repository some record is scoped
+// to, sorted and without duplicates.
+func (s *Store) KnownRepositories(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT DISTINCT repository FROM record_scopes WHERE repository != '' ORDER BY repository`)
+	if err != nil {
+		return nil, fmt.Errorf(`failed to list repositories: %w`, err)
+	}
+
+	var out []string
+	if err := scanInto(rows, func(rows *sql.Rows) error {
+		var repo string
+		if err := rows.Scan(&repo); err != nil {
+			return err
+		}
+		out = append(out, repo)
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	return out, nil
+}

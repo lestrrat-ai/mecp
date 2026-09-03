@@ -159,6 +159,65 @@ func TestPrepareTask(t *testing.T) {
 		require.Contains(t, warningCodes(pack.Warnings), mecp.WarnNoWorkspace)
 	})
 
+	t.Run("warns when the named repository matches nothing the store knows", func(t *testing.T) {
+		svc, _ := newService(t, reviewPreference())
+
+		pack, err := svc.PrepareTask(t.Context(), mecp.PrepareTaskRequest{
+			Caller:    agentCaller(),
+			Task:      "Review something",
+			Workspace: mecp.Workspace{Repository: "https://github.com/example/never-seen"},
+		})
+		require.NoError(t, err)
+		require.Contains(t, warningCodes(pack.Warnings), mecp.WarnUnknownRepository)
+	})
+
+	t.Run("a known repository with no matching record is not flagged", func(t *testing.T) {
+		svc, _ := newService(t, reviewPreference())
+
+		// The record exists for this repository but is scoped to review tasks,
+		// so an unrelated task kind filters it out. That is ordinary filtering,
+		// not a naming problem, and must not be reported as one.
+		pack, err := svc.PrepareTask(t.Context(), mecp.PrepareTaskRequest{
+			Caller:    agentCaller(),
+			Task:      "Cut a release",
+			TaskKind:  mecp.TaskRelease,
+			Workspace: heliumWorkspace(),
+		})
+		require.NoError(t, err)
+		require.NotContains(t, warningCodes(pack.Warnings), mecp.WarnUnknownRepository)
+	})
+
+	t.Run("an empty store does not blame the caller's spelling", func(t *testing.T) {
+		svc, _ := newService(t)
+
+		pack, err := svc.PrepareTask(t.Context(), mecp.PrepareTaskRequest{
+			Caller:    agentCaller(),
+			Task:      "Review something",
+			Workspace: heliumWorkspace(),
+		})
+		require.NoError(t, err)
+		require.NotContains(t, warningCodes(pack.Warnings), mecp.WarnUnknownRepository)
+	})
+
+	t.Run("the two spellings of one repository are not reported as unknown", func(t *testing.T) {
+		svc, _ := newService(t, stylesheetConstraint())
+
+		for _, spelling := range []string{
+			"https://github.com/lestrrat-go/helium",
+			"git@github.com:lestrrat-go/helium.git",
+			"github.com/lestrrat-go/helium",
+		} {
+			pack, err := svc.PrepareTask(t.Context(), mecp.PrepareTaskRequest{
+				Caller:    agentCaller(),
+				Task:      "Review the parser",
+				Workspace: mecp.Workspace{Repository: spelling},
+			})
+			require.NoError(t, err)
+			require.NotContains(t, warningCodes(pack.Warnings), mecp.WarnUnknownRepository, spelling)
+			require.Contains(t, itemIDs(pack.Items), "rec_stylesheet_constraint", spelling)
+		}
+	})
+
 	t.Run("rejects a budget too small to carry mandatory metadata", func(t *testing.T) {
 		svc, _ := newService(t, reviewPreference())
 

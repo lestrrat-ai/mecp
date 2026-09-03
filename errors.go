@@ -68,6 +68,7 @@ const (
 	WarnSourceUnavailable WarningCode = "source_unavailable"
 	WarnTruncated         WarningCode = "context_truncated"
 	WarnNoWorkspace       WarningCode = "no_workspace_supplied"
+	WarnUnknownRepository WarningCode = "unknown_repository"
 	WarnEvidenceRedacted  WarningCode = "evidence_redacted"
 	WarnRecordNotFound    WarningCode = "record_not_found"
 	WarnConflict          WarningCode = "conflicting_records"

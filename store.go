@@ -135,6 +135,12 @@ type Store interface {
 	// SupersededBy returns the IDs of records that supersede the given record.
 	SupersededBy(ctx context.Context, ids []string) (map[string][]string, error)
 
+	// KnownRepositories returns every canonical repository that at least one
+	// record is scoped to, sorted. It exists so the service can tell the
+	// difference between "nothing is stored for this repository" and "you named
+	// a repository this store has never heard of".
+	KnownRepositories(ctx context.Context) ([]string, error)
+
 	// PutProposal stores a proposal, returning the existing one when its key
 	// has already been used. The boolean reports whether a new row was created.
 	PutProposal(ctx context.Context, p *Proposal) (*Proposal, bool, error)
