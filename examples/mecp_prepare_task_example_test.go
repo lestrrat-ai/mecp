@@ -46,17 +46,15 @@ func Example_mecp_prepare_task() {
 			Subject:   "untrusted stylesheets",
 			Statement: "Untrusted XSLT stylesheets must never be executed during parsing.",
 			// A checked-in ADR outranks anything inferred from a conversation.
-			Authority:   mecp.AuthorityRepository,
-			Sensitivity: mecp.SensitivityProject,
-			Scope:       mecp.Scope{Repository: "https://github.com/lestrrat-go/helium"},
+			Authority: mecp.AuthorityRepository,
+			Scope:     mecp.Scope{Repository: "https://github.com/lestrrat-go/helium"},
 		},
 		{
-			ID:          "rec_review_weighting",
-			Kind:        mecp.KindPreference,
-			Subject:     "pre-v1 review weighting",
-			Statement:   "Weight implementation correctness above API compatibility before v1.",
-			Authority:   mecp.AuthorityUser,
-			Sensitivity: mecp.SensitivityProject,
+			ID:        "rec_review_weighting",
+			Kind:      mecp.KindPreference,
+			Subject:   "pre-v1 review weighting",
+			Statement: "Weight implementation correctness above API compatibility before v1.",
+			Authority: mecp.AuthorityUser,
 			Scope: mecp.Scope{
 				Repository: "https://github.com/lestrrat-go/helium",
 				TaskKinds:  []mecp.TaskKind{mecp.TaskCodeReview},
@@ -68,9 +66,8 @@ func Example_mecp_prepare_task() {
 			Subject:   "inferred rule",
 			Statement: "The reviewer probably wants shorter functions.",
 			// An agent's own inference can be returned, but never as a rule.
-			Authority:   mecp.AuthorityInferred,
-			Sensitivity: mecp.SensitivityProject,
-			Scope:       mecp.Scope{Repository: "https://github.com/lestrrat-go/helium"},
+			Authority: mecp.AuthorityInferred,
+			Scope:     mecp.Scope{Repository: "https://github.com/lestrrat-go/helium"},
 		},
 	}
 	for _, rec := range records {
@@ -90,10 +87,9 @@ func Example_mecp_prepare_task() {
 	// The caller identity comes from trusted configuration, never from the
 	// agent's own arguments.
 	caller := mecp.Caller{
-		PrincipalID:    "local-user",
-		ClientID:       "claude-code",
-		Capabilities:   []mecp.Capability{mecp.CapPrepare, mecp.CapSearchProject},
-		MaxSensitivity: mecp.SensitivityProject,
+		PrincipalID:  "local-user",
+		ClientID:     "claude-code",
+		Capabilities: []mecp.Capability{mecp.CapPrepare, mecp.CapSearch},
 	}
 
 	pack, err := svc.PrepareTask(ctx, mecp.PrepareTaskRequest{

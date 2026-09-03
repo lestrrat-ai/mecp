@@ -13,19 +13,18 @@ import (
 // task text and record statements: an audit trail that copies the data it is
 // auditing doubles the disclosure surface.
 type AuditEvent struct {
-	At                 time.Time      `json:"at"`
-	PrincipalID        string         `json:"principal_id"`
-	ClientID           string         `json:"client_id"`
-	Operation          string         `json:"operation"`
-	Scope              EffectiveScope `json:"scope"`
-	RecordIDs          []string       `json:"record_ids,omitempty"`
-	SensitivityClasses []Sensitivity  `json:"sensitivity_classes,omitempty"`
-	WarningCodes       []WarningCode  `json:"warning_codes,omitempty"`
-	Truncated          bool           `json:"truncated"`
-	ResultCount        int            `json:"result_count"`
-	LatencyMS          int64          `json:"latency_ms"`
-	ProposalID         string         `json:"proposal_id,omitempty"`
-	ErrorCode          ErrorCode      `json:"error_code,omitempty"`
+	At           time.Time      `json:"at"`
+	PrincipalID  string         `json:"principal_id"`
+	ClientID     string         `json:"client_id"`
+	Operation    string         `json:"operation"`
+	Scope        EffectiveScope `json:"scope"`
+	RecordIDs    []string       `json:"record_ids,omitempty"`
+	WarningCodes []WarningCode  `json:"warning_codes,omitempty"`
+	Truncated    bool           `json:"truncated"`
+	ResultCount  int            `json:"result_count"`
+	LatencyMS    int64          `json:"latency_ms"`
+	ProposalID   string         `json:"proposal_id,omitempty"`
+	ErrorCode    ErrorCode      `json:"error_code,omitempty"`
 }
 
 // AuditSink persists audit events.

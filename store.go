@@ -13,8 +13,8 @@ var ErrNotFound = errors.New("mecp: not found")
 // store itself, before any full-text matching, so that an unauthorized row
 // never reaches ranking, snippet generation, or even a result count.
 //
-// PrincipalID and MaxSensitivity are the security-critical fields: a store
-// implementation must apply them unconditionally.
+// PrincipalID is the security-critical field: a store implementation must
+// apply it unconditionally.
 type RecordQuery struct {
 	PrincipalID string
 
@@ -30,12 +30,11 @@ type RecordQuery struct {
 	Repositories         []string
 	AllowGlobal          bool
 
-	MaxSensitivity Sensitivity
-	Kinds          []RecordKind
-	Statuses       []RecordStatus
-	Tags           []string
-	IDs            []string
-	Subject        string
+	Kinds    []RecordKind
+	Statuses []RecordStatus
+	Tags     []string
+	IDs      []string
+	Subject  string
 
 	// At bounds the validity interval. A zero time disables the check, which
 	// the administrative CLI uses to list historical records.

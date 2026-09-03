@@ -148,7 +148,7 @@ func TestScopeMatch(t *testing.T) {
 	})
 }
 
-func TestSensitivityAndAuthorityOrdering(t *testing.T) {
+func TestAuthorityOrdering(t *testing.T) {
 	t.Run("authority ranks explicit user above inference", func(t *testing.T) {
 		require.Greater(t, mecp.AuthorityUser.Tier(), mecp.AuthorityInferred.Tier())
 		require.Greater(t, mecp.AuthorityRepository.Tier(), mecp.AuthorityUser.Tier())
@@ -160,29 +160,64 @@ func TestSensitivityAndAuthorityOrdering(t *testing.T) {
 		require.Zero(t, mecp.Authority("something-new").Tier())
 		require.False(t, mecp.Authority("something-new").Directive())
 	})
+}
 
-	t.Run("an unknown sensitivity fails closed", func(t *testing.T) {
-		unknown := mecp.Sensitivity("classified")
-		require.False(t, unknown.AtMost(mecp.SensitivityRestricted))
-	})
-
-	t.Run("the ceiling never exceeds what capabilities imply", func(t *testing.T) {
-		caller := mecp.Caller{
-			PrincipalID:    "local-user",
-			ClientID:       "agent",
-			Capabilities:   []mecp.Capability{mecp.CapPrepare, mecp.CapSearchProject},
-			MaxSensitivity: mecp.SensitivityRestricted,
+func TestCapabilities(t *testing.T) {
+	t.Run("admin holds every capability", func(t *testing.T) {
+		admin := mecp.Caller{
+			PrincipalID:  "local-user",
+			ClientID:     "contextctl",
+			Capabilities: []mecp.Capability{mecp.CapAdmin},
 		}
-		require.Equal(t, mecp.SensitivityProject, caller.SensitivityCeiling())
+		for _, cap := range mecp.AllCapabilities {
+			require.True(t, admin.Has(cap), cap)
+		}
 	})
 
-	t.Run("evidence is held to a stricter bar than statements", func(t *testing.T) {
+	t.Run("reading statements does not imply reading quoted source text", func(t *testing.T) {
 		caller := mecp.Caller{
 			PrincipalID:  "local-user",
 			ClientID:     "agent",
-			Capabilities: []mecp.Capability{mecp.CapSearchPersonal},
+			Capabilities: []mecp.Capability{mecp.CapPrepare, mecp.CapSearch},
 		}
-		require.Equal(t, mecp.SensitivityPersonal, caller.SensitivityCeiling())
-		require.Equal(t, mecp.SensitivityPublic, caller.EvidenceCeiling())
+		require.True(t, caller.Has(mecp.CapSearch))
+		require.False(t, caller.Has(mecp.CapEvidence))
+	})
+
+	t.Run("a profile with no capabilities is unusable", func(t *testing.T) {
+		caller := mecp.Caller{PrincipalID: "local-user", ClientID: "agent"}
+		require.Error(t, caller.Validate())
+	})
+
+	t.Run("an unknown capability is refused rather than ignored", func(t *testing.T) {
+		caller := mecp.Caller{
+			PrincipalID:  "local-user",
+			ClientID:     "agent",
+			Capabilities: []mecp.Capability{"context:everything"},
+		}
+		require.Error(t, caller.Validate())
+	})
+}
+
+func TestRepositoryAllowlist(t *testing.T) {
+	caller := mecp.Caller{
+		PrincipalID:         "local-user",
+		ClientID:            "agent",
+		Capabilities:        []mecp.Capability{mecp.CapPrepare},
+		AllowedRepositories: []string{"git@github.com:lestrrat-go/helium.git"},
+	}
+
+	t.Run("the allowlist is compared after canonicalization", func(t *testing.T) {
+		require.True(t, caller.RepositoryAllowed(heliumRepo))
+	})
+
+	t.Run("anything else is refused", func(t *testing.T) {
+		require.False(t, caller.RepositoryAllowed("https://github.com/example/billing"))
+	})
+
+	t.Run("an empty allowlist means unrestricted", func(t *testing.T) {
+		open := caller
+		open.AllowedRepositories = nil
+		require.True(t, open.RepositoryAllowed("https://github.com/example/billing"))
 	})
 }

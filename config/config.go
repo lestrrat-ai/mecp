@@ -97,16 +97,19 @@ type Validation struct {
 }
 
 // ClientProfile is what one agent host is allowed to do.
+//
+// A profile is selected by a command-line flag, so anyone who can edit the MCP
+// host configuration can pick any profile. It shapes what each host sees; it is
+// not a security control. See docs/design-deltas.md.
 type ClientProfile struct {
 	Capabilities        []mecp.Capability `yaml:"capabilities"`
-	MaxSensitivity      mecp.Sensitivity  `yaml:"max_sensitivity"`
 	AllowedRepositories []string          `yaml:"allowed_repositories,omitempty"`
 	AllowedRoots        []string          `yaml:"allowed_roots,omitempty"`
 }
 
 // Default returns the configuration a fresh installation gets. The default
-// agent profile can prepare context, search project-sensitivity records, and
-// read project evidence. It cannot read personal records and cannot propose.
+// agent profile can prepare context, search, and read verbatim evidence. It
+// cannot propose, so the agent-facing process opens the database read-only.
 func Default() *Config {
 	return &Config{
 		Principal: "local-user",
@@ -125,10 +128,9 @@ func Default() *Config {
 			DefaultClientID: {
 				Capabilities: []mecp.Capability{
 					mecp.CapPrepare,
-					mecp.CapSearchProject,
-					mecp.CapEvidenceProject,
+					mecp.CapSearch,
+					mecp.CapEvidence,
 				},
-				MaxSensitivity: mecp.SensitivityProject,
 			},
 		},
 	}
@@ -209,9 +211,6 @@ func (c *Config) Validate() error {
 				return fmt.Errorf(`client profile %q declares unknown capability %q`, name, cap)
 			}
 		}
-		if profile.MaxSensitivity != "" && !profile.MaxSensitivity.Valid() {
-			return fmt.Errorf(`client profile %q declares unknown sensitivity %q`, name, profile.MaxSensitivity)
-		}
 	}
 	return nil
 }
@@ -238,7 +237,6 @@ func (c *Config) Caller(clientID string) mecp.Caller {
 		PrincipalID:         c.Principal,
 		ClientID:            clientID,
 		Capabilities:        profile.Capabilities,
-		MaxSensitivity:      profile.MaxSensitivity,
 		AllowedRepositories: profile.AllowedRepositories,
 		AllowedRoots:        roots,
 	}
@@ -248,10 +246,9 @@ func (c *Config) Caller(clientID string) mecp.Caller {
 // from any agent-facing transport.
 func (c *Config) AdminCaller() mecp.Caller {
 	return mecp.Caller{
-		PrincipalID:    c.Principal,
-		ClientID:       "contextctl",
-		Capabilities:   []mecp.Capability{mecp.CapAdmin},
-		MaxSensitivity: mecp.SensitivityRestricted,
+		PrincipalID:  c.Principal,
+		ClientID:     "contextctl",
+		Capabilities: []mecp.Capability{mecp.CapAdmin},
 	}
 }
 

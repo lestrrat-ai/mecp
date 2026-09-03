@@ -45,10 +45,9 @@ func Example_mecp_propose_and_review() {
 	}
 
 	agent := mecp.Caller{
-		PrincipalID:    "local-user",
-		ClientID:       "claude-code",
-		Capabilities:   []mecp.Capability{mecp.CapPrepare, mecp.CapSearchProject, mecp.CapPropose},
-		MaxSensitivity: mecp.SensitivityProject,
+		PrincipalID:  "local-user",
+		ClientID:     "claude-code",
+		Capabilities: []mecp.Capability{mecp.CapPrepare, mecp.CapSearch, mecp.CapPropose},
 	}
 
 	req := mecp.ProposeRecordRequest{

@@ -12,7 +12,7 @@ import (
 func (s *service) Search(ctx context.Context, req SearchRequest) (*SearchResult, error) {
 	start := time.Now()
 
-	if !req.Caller.Has(CapSearchProject) && !req.Caller.Has(CapSearchPersonal) {
+	if !req.Caller.Has(CapSearch) {
 		return nil, errorf(CodeUnauthorizedScope, "client profile %q may not search context", req.Caller.ClientID)
 	}
 	if strings.TrimSpace(req.Query) == "" {
@@ -118,14 +118,13 @@ func (s *service) Search(ctx context.Context, req SearchRequest) (*SearchResult,
 	}
 
 	s.writeAudit(ctx, AuditEvent{
-		PrincipalID:        req.Caller.PrincipalID,
-		ClientID:           req.Caller.ClientID,
-		Operation:          "search",
-		Scope:              scope,
-		RecordIDs:          searchRecordIDs(items),
-		SensitivityClasses: sensitivityClasses(cands),
-		WarningCodes:       warningCodes(warnings),
-		ResultCount:        len(items),
+		PrincipalID:  req.Caller.PrincipalID,
+		ClientID:     req.Caller.ClientID,
+		Operation:    "search",
+		Scope:        scope,
+		RecordIDs:    searchRecordIDs(items),
+		WarningCodes: warningCodes(warnings),
+		ResultCount:  len(items),
 	}, start)
 
 	return result, nil

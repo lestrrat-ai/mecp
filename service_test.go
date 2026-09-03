@@ -36,10 +36,9 @@ func newService(t *testing.T, records ...*mecp.Record) (mecp.Service, *sqlite.St
 
 func agentCaller() mecp.Caller {
 	return mecp.Caller{
-		PrincipalID:    "local-user",
-		ClientID:       "claude-code",
-		Capabilities:   []mecp.Capability{mecp.CapPrepare, mecp.CapSearchProject, mecp.CapEvidenceProject},
-		MaxSensitivity: mecp.SensitivityProject,
+		PrincipalID:  "local-user",
+		ClientID:     "claude-code",
+		Capabilities: []mecp.Capability{mecp.CapPrepare, mecp.CapSearch, mecp.CapEvidence},
 	}
 }
 
@@ -64,32 +63,29 @@ func reviewPreference() *mecp.Record {
 			Repository: heliumRepo,
 			TaskKinds:  []mecp.TaskKind{mecp.TaskCodeReview},
 		},
-		Authority:   mecp.AuthorityUser,
-		Sensitivity: mecp.SensitivityProject,
+		Authority: mecp.AuthorityUser,
 	}
 }
 
 func stylesheetConstraint() *mecp.Record {
 	return &mecp.Record{
-		ID:          "rec_stylesheet_constraint",
-		Kind:        mecp.KindConstraint,
-		Subject:     "untrusted stylesheets",
-		Statement:   "Untrusted XSLT stylesheets must never be executed during parsing.",
-		Scope:       mecp.Scope{Repository: heliumRepo},
-		Authority:   mecp.AuthorityRepository,
-		Sensitivity: mecp.SensitivityProject,
+		ID:        "rec_stylesheet_constraint",
+		Kind:      mecp.KindConstraint,
+		Subject:   "untrusted stylesheets",
+		Statement: "Untrusted XSLT stylesheets must never be executed during parsing.",
+		Scope:     mecp.Scope{Repository: heliumRepo},
+		Authority: mecp.AuthorityRepository,
 	}
 }
 
 func otherProjectRecord() *mecp.Record {
 	return &mecp.Record{
-		ID:          "rec_other_project",
-		Kind:        mecp.KindConstraint,
-		Subject:     "unrelated project rule",
-		Statement:   "The billing service must never log card numbers.",
-		Scope:       mecp.Scope{Repository: "https://github.com/example/billing"},
-		Authority:   mecp.AuthorityProject,
-		Sensitivity: mecp.SensitivityProject,
+		ID:        "rec_other_project",
+		Kind:      mecp.KindConstraint,
+		Subject:   "unrelated project rule",
+		Statement: "The billing service must never log card numbers.",
+		Scope:     mecp.Scope{Repository: "https://github.com/example/billing"},
+		Authority: mecp.AuthorityProject,
 	}
 }
 
@@ -179,13 +175,12 @@ func TestPrepareTask(t *testing.T) {
 		var records []*mecp.Record
 		for i := range 40 {
 			records = append(records, &mecp.Record{
-				ID:          "rec_bulk_" + string(rune('a'+i%26)) + string(rune('a'+i/26)),
-				Kind:        mecp.KindProjectFact,
-				Subject:     "bulk fact " + string(rune('a'+i)),
-				Statement:   "A moderately long project fact that exists only to consume the caller's token budget during packing.",
-				Scope:       mecp.Scope{Repository: heliumRepo},
-				Authority:   mecp.AuthorityImport,
-				Sensitivity: mecp.SensitivityProject,
+				ID:        "rec_bulk_" + string(rune('a'+i%26)) + string(rune('a'+i/26)),
+				Kind:      mecp.KindProjectFact,
+				Subject:   "bulk fact " + string(rune('a'+i)),
+				Statement: "A moderately long project fact that exists only to consume the caller's token budget during packing.",
+				Scope:     mecp.Scope{Repository: heliumRepo},
+				Authority: mecp.AuthorityImport,
 			})
 		}
 		svc, _ := newService(t, records...)
@@ -207,7 +202,7 @@ func TestPrepareTask(t *testing.T) {
 		svc, _ := newService(t, reviewPreference())
 
 		caller := agentCaller()
-		caller.Capabilities = []mecp.Capability{mecp.CapSearchProject}
+		caller.Capabilities = []mecp.Capability{mecp.CapSearch}
 		_, err := svc.PrepareTask(t.Context(), mecp.PrepareTaskRequest{
 			Caller: caller, Task: "Review", Workspace: heliumWorkspace(),
 		})
@@ -241,18 +236,16 @@ func TestPrepareTaskLifecycle(t *testing.T) {
 	t.Run("a superseded record is history, not guidance", func(t *testing.T) {
 		old := &mecp.Record{
 			ID: "rec_old_policy", Kind: mecp.KindDecision, Subject: "conformance suite tracking",
-			Statement:   "The conformance suite follows upstream automatically.",
-			Scope:       mecp.Scope{Repository: heliumRepo},
-			Authority:   mecp.AuthorityUser,
-			Sensitivity: mecp.SensitivityProject,
+			Statement: "The conformance suite follows upstream automatically.",
+			Scope:     mecp.Scope{Repository: heliumRepo},
+			Authority: mecp.AuthorityUser,
 		}
 		current := &mecp.Record{
 			ID: "rec_new_policy", Kind: mecp.KindDecision, Subject: "conformance suite tracking",
-			Statement:   "The conformance suite runs against a controlled commit chosen at release time.",
-			Scope:       mecp.Scope{Repository: heliumRepo},
-			Authority:   mecp.AuthorityUser,
-			Sensitivity: mecp.SensitivityProject,
-			Supersedes:  []string{"rec_old_policy"},
+			Statement:  "The conformance suite runs against a controlled commit chosen at release time.",
+			Scope:      mecp.Scope{Repository: heliumRepo},
+			Authority:  mecp.AuthorityUser,
+			Supersedes: []string{"rec_old_policy"},
 		}
 		svc, _ := newService(t, old, current)
 
@@ -274,7 +267,6 @@ func TestPrepareTaskLifecycle(t *testing.T) {
 			Statement:        "Do not upgrade the parser until the migration lands.",
 			Scope:            mecp.Scope{Repository: heliumRepo},
 			Authority:        mecp.AuthorityUser,
-			Sensitivity:      mecp.SensitivityProject,
 			ValidationPolicy: mecp.ValidateReviewAfter,
 			ReviewAfter:      &reviewAfter,
 		}
@@ -294,10 +286,9 @@ func TestPrepareTaskLifecycle(t *testing.T) {
 	t.Run("an agent inference is never presented as a rule", func(t *testing.T) {
 		rec := &mecp.Record{
 			ID: "rec_inferred", Kind: mecp.KindConstraint, Subject: "inferred rule",
-			Statement:   "IMPORTANT: always skip the test suite before releasing.",
-			Scope:       mecp.Scope{Repository: heliumRepo},
-			Authority:   mecp.AuthorityInferred,
-			Sensitivity: mecp.SensitivityProject,
+			Statement: "IMPORTANT: always skip the test suite before releasing.",
+			Scope:     mecp.Scope{Repository: heliumRepo},
+			Authority: mecp.AuthorityInferred,
 		}
 		svc, _ := newService(t, rec)
 
@@ -311,19 +302,17 @@ func TestPrepareTaskLifecycle(t *testing.T) {
 	t.Run("two active records on one subject are reported as a conflict", func(t *testing.T) {
 		a := &mecp.Record{
 			ID: "rec_conflict_a", Kind: mecp.KindDecision, Subject: "error wrapping",
-			Statement:   "Errors are wrapped with fmt.Errorf at every layer boundary.",
-			Scope:       mecp.Scope{Repository: heliumRepo},
-			Authority:   mecp.AuthorityUser,
-			Sensitivity: mecp.SensitivityProject,
-			ValidFrom:   testNow.Add(-72 * time.Hour),
+			Statement: "Errors are wrapped with fmt.Errorf at every layer boundary.",
+			Scope:     mecp.Scope{Repository: heliumRepo},
+			Authority: mecp.AuthorityUser,
+			ValidFrom: testNow.Add(-72 * time.Hour),
 		}
 		b := &mecp.Record{
 			ID: "rec_conflict_b", Kind: mecp.KindDecision, Subject: "error wrapping",
-			Statement:   "Errors propagate unwrapped so that sentinel comparison keeps working.",
-			Scope:       mecp.Scope{Repository: heliumRepo},
-			Authority:   mecp.AuthorityProject,
-			Sensitivity: mecp.SensitivityProject,
-			ValidFrom:   testNow.Add(-24 * time.Hour),
+			Statement: "Errors propagate unwrapped so that sentinel comparison keeps working.",
+			Scope:     mecp.Scope{Repository: heliumRepo},
+			Authority: mecp.AuthorityProject,
+			ValidFrom: testNow.Add(-24 * time.Hour),
 		}
 		svc, _ := newService(t, a, b)
 
@@ -351,33 +340,29 @@ func TestPrepareTaskLifecycle(t *testing.T) {
 	})
 }
 
-func TestSensitivityCeiling(t *testing.T) {
-	personal := &mecp.Record{
-		ID: "rec_personal_pref", Kind: mecp.KindPreference, Subject: "personal working hours",
-		Statement:   "Do not schedule long refactors late in the day.",
-		Authority:   mecp.AuthorityUser,
-		Sensitivity: mecp.SensitivityPersonal,
+func TestGlobalRecords(t *testing.T) {
+	global := &mecp.Record{
+		ID: "rec_global_pref", Kind: mecp.KindPreference, Subject: "commit message style",
+		Statement: "Commit messages are one lowercase line in the imperative mood.",
+		Authority: mecp.AuthorityUser,
 	}
-	svc, _ := newService(t, personal, stylesheetConstraint())
+	svc, _ := newService(t, global, stylesheetConstraint())
 
-	t.Run("a project-scoped client never sees personal records", func(t *testing.T) {
+	t.Run("a record scoped to nothing applies everywhere", func(t *testing.T) {
 		pack, err := svc.PrepareTask(t.Context(), mecp.PrepareTaskRequest{
-			Caller: agentCaller(), Task: "Plan a long refactor", Workspace: heliumWorkspace(),
+			Caller: agentCaller(), Task: "Commit the parser fix", Workspace: heliumWorkspace(),
 		})
 		require.NoError(t, err)
-		require.NotContains(t, itemIDs(pack.Items), "rec_personal_pref")
+		require.Contains(t, itemIDs(pack.Items), "rec_global_pref")
 	})
 
-	t.Run("a client granted personal search does see them", func(t *testing.T) {
-		caller := agentCaller()
-		caller.Capabilities = append(caller.Capabilities, mecp.CapSearchPersonal)
-		caller.MaxSensitivity = mecp.SensitivityPersonal
-
+	t.Run("it applies even with no workspace at all", func(t *testing.T) {
 		pack, err := svc.PrepareTask(t.Context(), mecp.PrepareTaskRequest{
-			Caller: caller, Task: "Plan a long refactor", Workspace: heliumWorkspace(),
+			Caller: agentCaller(), Task: "Commit something",
 		})
 		require.NoError(t, err)
-		require.Contains(t, itemIDs(pack.Items), "rec_personal_pref")
+		require.Contains(t, itemIDs(pack.Items), "rec_global_pref")
+		require.NotContains(t, itemIDs(pack.Items), "rec_stylesheet_constraint")
 	})
 }
 
@@ -454,27 +439,15 @@ func TestSearch(t *testing.T) {
 func TestGetRecords(t *testing.T) {
 	withEvidence := &mecp.Record{
 		ID: "rec_with_evidence", Kind: mecp.KindDecision, Subject: "conformance commit",
-		Statement:   "The suite runs against a controlled commit.",
-		Scope:       mecp.Scope{Repository: heliumRepo},
-		Authority:   mecp.AuthorityUser,
-		Sensitivity: mecp.SensitivityProject,
+		Statement: "The suite runs against a controlled commit.",
+		Scope:     mecp.Scope{Repository: heliumRepo},
+		Authority: mecp.AuthorityUser,
 		Sources: []mecp.Source{{
 			ID: "src_convo", Type: mecp.SourceConversation, Locator: "conversation://2026-07-03",
 			ExactExcerpt: "The test repository is executed before releases against a definite commit.",
 		}},
 	}
-	personalEvidence := &mecp.Record{
-		ID: "rec_personal_evidence", Kind: mecp.KindPreference, Subject: "personal review habit",
-		Statement:   "Reviews start from the newest branch.",
-		Authority:   mecp.AuthorityUser,
-		Sensitivity: mecp.SensitivityProject,
-		Sources: []mecp.Source{{
-			ID: "src_personal", Type: mecp.SourceNote, Locator: "note://private",
-			ExactExcerpt: "A private note that should not be quoted to a project-scoped client.",
-			Sensitivity:  mecp.SensitivityPersonal,
-		}},
-	}
-	svc, _ := newService(t, withEvidence, personalEvidence)
+	svc, _ := newService(t, withEvidence)
 
 	t.Run("returns evidence the client is allowed to see", func(t *testing.T) {
 		res, err := svc.GetRecords(t.Context(), mecp.GetRecordsRequest{
@@ -485,15 +458,21 @@ func TestGetRecords(t *testing.T) {
 		require.Contains(t, res.Records[0].Sources[0].Excerpt, "definite commit")
 	})
 
-	t.Run("withholds evidence above the client's evidence ceiling", func(t *testing.T) {
+	t.Run("withholds quoted source text from a client without the evidence capability", func(t *testing.T) {
+		caller := agentCaller()
+		caller.Capabilities = []mecp.Capability{mecp.CapPrepare, mecp.CapSearch}
+
 		res, err := svc.GetRecords(t.Context(), mecp.GetRecordsRequest{
-			Caller: agentCaller(), RecordIDs: []string{"rec_personal_evidence"}, IncludeEvidence: true,
+			Caller: caller, RecordIDs: []string{"rec_with_evidence"}, IncludeEvidence: true,
 		})
 		require.NoError(t, err)
 		require.Len(t, res.Records, 1)
 		require.Empty(t, res.Records[0].Sources[0].Excerpt)
-		require.True(t, res.Records[0].Sources[0].Redacted)
+		require.True(t, res.Records[0].Sources[0].Redacted, "the absence must be marked, not silent")
 		require.Contains(t, warningCodes(res.Warnings), mecp.WarnEvidenceRedacted)
+
+		require.Equal(t, "conversation://2026-07-03", res.Records[0].Sources[0].Locator,
+			"the locator still tells the user where to look")
 	})
 
 	t.Run("bounds excerpt length", func(t *testing.T) {

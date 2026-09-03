@@ -28,7 +28,6 @@ assigns explicit_user authority on its own; use --authority when you are
 importing material you actually authored.`,
 		Flags: append(globalFlags(),
 			&cli.StringFlag{Name: "authority", Usage: "authority to assign to imported records", Value: string(mecp.AuthorityImport)},
-			&cli.StringFlag{Name: "sensitivity", Usage: "sensitivity to assign", Value: string(mecp.SensitivityProject)},
 			&cli.BoolFlag{Name: "dry-run", Usage: "report what would be imported without writing"},
 		),
 		Action: runImport,
@@ -75,14 +74,8 @@ func importFiles(cmd *cli.Command, principal, path string, store func(*mecp.Reco
 	if !authority.Valid() {
 		return fmt.Errorf(`unknown authority %q`, cmd.String("authority"))
 	}
-	sensitivity := mecp.Sensitivity(cmd.String("sensitivity"))
-	if !sensitivity.Valid() {
-		return fmt.Errorf(`unknown sensitivity %q`, cmd.String("sensitivity"))
-	}
-
 	imp := source.NewFileImporter(principal)
 	imp.DefaultAuthority = authority
-	imp.DefaultSensitivity = sensitivity
 	imp.Now = time.Now().UTC()
 
 	recs, err := imp.ImportPath(path)

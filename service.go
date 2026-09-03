@@ -98,9 +98,9 @@ type GetRecordsRequest struct {
 }
 
 // SourceView is a source as disclosed to a caller. Excerpt carries untrusted
-// source text and is empty when the caller lacks the evidence capability for
-// the record's sensitivity; Redacted then says so explicitly rather than
-// letting the absence look like "no evidence exists".
+// source text and is empty when the caller lacks the evidence capability;
+// Redacted then says so explicitly rather than letting the absence look like
+// "no evidence exists".
 type SourceView struct {
 	SourceID    string     `json:"source_id"`
 	Type        SourceType `json:"type"`
@@ -123,7 +123,6 @@ type RecordDetail struct {
 	Rationale        string           `json:"rationale,omitempty"`
 	Authority        Authority        `json:"authority"`
 	Status           RecordStatus     `json:"status"`
-	Sensitivity      Sensitivity      `json:"sensitivity"`
 	Scope            Scope            `json:"scope"`
 	Tags             []string         `json:"tags,omitempty"`
 	Confidence       float64          `json:"confidence"`
@@ -368,7 +367,6 @@ type collectRequest struct {
 // shared by PrepareTask and Search.
 func (s *service) collect(ctx context.Context, req collectRequest) ([]*Candidate, []Warning, error) {
 	now := s.clock.Now()
-	ceiling := req.Caller.SensitivityCeiling()
 
 	statuses := []RecordStatus{StatusActive, StatusDisputed, StatusStale}
 	if req.IncludeStale {
@@ -377,7 +375,6 @@ func (s *service) collect(ctx context.Context, req collectRequest) ([]*Candidate
 
 	base := RecordQuery{
 		PrincipalID:          req.Caller.PrincipalID,
-		MaxSensitivity:       ceiling,
 		Kinds:                req.Kinds,
 		Statuses:             statuses,
 		At:                   now,
@@ -627,18 +624,4 @@ func (s *service) writeAudit(ctx context.Context, ev AuditEvent, start time.Time
 	// An audit failure must not fail the user's call; it is recorded locally
 	// and best-effort by design.
 	_ = s.audit.Write(ctx, ev)
-}
-
-func sensitivityClasses(cands []*Candidate) []Sensitivity {
-	seen := make(map[Sensitivity]struct{}, len(cands))
-	for _, c := range cands {
-		seen[c.Record.Sensitivity] = struct{}{}
-	}
-	out := make([]Sensitivity, 0, len(seen))
-	for _, s := range AllSensitivities {
-		if _, ok := seen[s]; ok {
-			out = append(out, s)
-		}
-	}
-	return out
 }

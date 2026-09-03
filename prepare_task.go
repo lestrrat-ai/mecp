@@ -103,15 +103,14 @@ func (s *service) PrepareTask(ctx context.Context, req PrepareTaskRequest) (*Con
 	})
 
 	s.writeAudit(ctx, AuditEvent{
-		PrincipalID:        req.Caller.PrincipalID,
-		ClientID:           req.Caller.ClientID,
-		Operation:          "prepare_task",
-		Scope:              scope,
-		RecordIDs:          itemRecordIDs(items),
-		SensitivityClasses: sensitivityClasses(cands),
-		WarningCodes:       warningCodes(warnings),
-		Truncated:          budgetReport.Truncated,
-		ResultCount:        len(items),
+		PrincipalID:  req.Caller.PrincipalID,
+		ClientID:     req.Caller.ClientID,
+		Operation:    "prepare_task",
+		Scope:        scope,
+		RecordIDs:    itemRecordIDs(items),
+		WarningCodes: warningCodes(warnings),
+		Truncated:    budgetReport.Truncated,
+		ResultCount:  len(items),
 	}, start)
 
 	return pack, nil

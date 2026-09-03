@@ -41,9 +41,8 @@ func TestRecordRoundTrip(t *testing.T) {
 			Repository: "git@github.com:lestrrat-go/helium.git",
 			TaskKinds:  []mecp.TaskKind{mecp.TaskRelease},
 		},
-		Authority:   mecp.AuthorityUser,
-		Sensitivity: mecp.SensitivityProject,
-		Tags:        []string{"conformance", "release"},
+		Authority: mecp.AuthorityUser,
+		Tags:      []string{"conformance", "release"},
 		Sources: []mecp.Source{{
 			ID:           "src_conversation_2026_07_03",
 			Type:         mecp.SourceConversation,
@@ -98,33 +97,32 @@ func TestSearchRecords(t *testing.T) {
 	ctx := t.Context()
 
 	conformance := mustRecord(t, &mecp.Record{
-		ID:          "rec_conformance",
-		Kind:        mecp.KindDecision,
-		Subject:     "release conformance testing",
-		Statement:   "The conformance suite runs against a controlled commit before a release.",
-		Scope:       mecp.Scope{Repository: "https://github.com/lestrrat-go/helium"},
-		Authority:   mecp.AuthorityUser,
-		Sensitivity: mecp.SensitivityProject,
-		Tags:        []string{"conformance"},
+		ID:        "rec_conformance",
+		Kind:      mecp.KindDecision,
+		Subject:   "release conformance testing",
+		Statement: "The conformance suite runs against a controlled commit before a release.",
+		Scope:     mecp.Scope{Repository: "https://github.com/lestrrat-go/helium"},
+		Authority: mecp.AuthorityUser,
+		Tags:      []string{"conformance"},
 	})
 	styles := mustRecord(t, &mecp.Record{
-		ID:          "rec_stylesheet",
-		Kind:        mecp.KindConstraint,
-		Subject:     "untrusted stylesheets",
-		Statement:   "Untrusted XSLT stylesheets must never be executed during parsing.",
-		Scope:       mecp.Scope{Repository: "https://github.com/lestrrat-go/helium"},
-		Authority:   mecp.AuthorityUser,
-		Sensitivity: mecp.SensitivityProject,
+		ID:        "rec_stylesheet",
+		Kind:      mecp.KindConstraint,
+		Subject:   "untrusted stylesheets",
+		Statement: "Untrusted XSLT stylesheets must never be executed during parsing.",
+		Scope:     mecp.Scope{Repository: "https://github.com/lestrrat-go/helium"},
+		Authority: mecp.AuthorityUser,
 	})
-	personal := mustRecord(t, &mecp.Record{
-		ID:          "rec_personal",
-		Kind:        mecp.KindPreference,
-		Subject:     "conformance reporting style",
-		Statement:   "Personal note about conformance reporting.",
-		Authority:   mecp.AuthorityUser,
-		Sensitivity: mecp.SensitivityPersonal,
+	// A record scoped to nothing, deliberately about an unrelated topic so that
+	// it does not compete with the scoped records for the queries below.
+	global := mustRecord(t, &mecp.Record{
+		ID:        "rec_global",
+		Kind:      mecp.KindPreference,
+		Subject:   "commit message style",
+		Statement: "Commit messages are one lowercase line in the imperative mood.",
+		Authority: mecp.AuthorityUser,
 	})
-	for _, rec := range []*mecp.Record{conformance, styles, personal} {
+	for _, rec := range []*mecp.Record{conformance, styles, global} {
 		require.NoError(t, store.PutRecord(ctx, rec))
 	}
 
@@ -137,14 +135,24 @@ func TestSearchRecords(t *testing.T) {
 		require.InDelta(t, 1.0, hits[0].Relevance, 0.001)
 	})
 
-	t.Run("sensitivity ceiling is applied before matching", func(t *testing.T) {
+	t.Run("another principal's records are filtered before matching", func(t *testing.T) {
+		theirs := mustRecord(t, &mecp.Record{
+			ID:        "rec_theirs",
+			Kind:      mecp.KindPreference,
+			Subject:   "their conformance habit",
+			Statement: "Someone else's note about conformance.",
+			Scope:     mecp.Scope{User: "another-user"},
+			Authority: mecp.AuthorityUser,
+		})
+		require.NoError(t, store.PutRecord(ctx, theirs))
+
 		hits, err := store.SearchRecords(ctx, mecp.SearchQuery{
-			RecordQuery: mecp.RecordQuery{MaxSensitivity: mecp.SensitivityProject},
+			RecordQuery: mecp.RecordQuery{PrincipalID: "local-user"},
 			Text:        "conformance",
 		})
 		require.NoError(t, err)
 		for _, hit := range hits {
-			require.NotEqual(t, "rec_personal", hit.Record.ID)
+			require.NotEqual(t, "rec_theirs", hit.Record.ID)
 		}
 	})
 
@@ -181,14 +189,14 @@ func TestSupersession(t *testing.T) {
 	old := mustRecord(t, &mecp.Record{
 		ID: "rec_old", Kind: mecp.KindDecision, Subject: "test workflow",
 		Statement: "The suite follows upstream automatically.",
-		Authority: mecp.AuthorityUser, Sensitivity: mecp.SensitivityProject,
+		Authority: mecp.AuthorityUser,
 	})
 	require.NoError(t, store.PutRecord(ctx, old))
 
 	replacement := mustRecord(t, &mecp.Record{
 		ID: "rec_new", Kind: mecp.KindDecision, Subject: "test workflow",
-		Statement: "The suite runs against a controlled commit.",
-		Authority: mecp.AuthorityUser, Sensitivity: mecp.SensitivityProject,
+		Statement:  "The suite runs against a controlled commit.",
+		Authority:  mecp.AuthorityUser,
 		Supersedes: []string{"rec_old"},
 	})
 	require.NoError(t, store.PutRecord(ctx, replacement))
@@ -244,7 +252,7 @@ func TestContentVersionChangesWithWrites(t *testing.T) {
 
 	require.NoError(t, store.PutRecord(ctx, mustRecord(t, &mecp.Record{
 		ID: "rec_v", Kind: mecp.KindObservation, Subject: "x", Statement: "y",
-		Authority: mecp.AuthorityInferred, Sensitivity: mecp.SensitivityProject,
+		Authority: mecp.AuthorityInferred,
 	})))
 
 	after, err := store.ContentVersion(ctx)

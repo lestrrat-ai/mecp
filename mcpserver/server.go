@@ -129,7 +129,7 @@ func (s *Server) register() {
 		}, s.handlePrepareTask)
 	}
 
-	if s.caller.Has(mecp.CapSearchProject) || s.caller.Has(mecp.CapSearchPersonal) {
+	if s.caller.Has(mecp.CapSearch) {
 		mcp.AddTool(s.mcp, &mcp.Tool{
 			Name:        ToolSearch,
 			Title:       "Search stored context",

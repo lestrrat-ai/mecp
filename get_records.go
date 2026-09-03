@@ -12,7 +12,7 @@ import (
 func (s *service) GetRecords(ctx context.Context, req GetRecordsRequest) (*RecordResult, error) {
 	start := time.Now()
 
-	if !req.Caller.Has(CapSearchProject) && !req.Caller.Has(CapSearchPersonal) && !req.Caller.Has(CapPrepare) {
+	if !req.Caller.Has(CapSearch) && !req.Caller.Has(CapPrepare) {
 		return nil, errorf(CodeUnauthorizedScope, "client profile %q may not read records", req.Caller.ClientID)
 	}
 	if err := req.Caller.Validate(); err != nil {
@@ -38,11 +38,10 @@ func (s *service) GetRecords(ctx context.Context, req GetRecordsRequest) (*Recor
 	wanted = slices.Compact(wanted)
 
 	query := RecordQuery{
-		PrincipalID:    req.Caller.PrincipalID,
-		MaxSensitivity: req.Caller.SensitivityCeiling(),
-		IDs:            wanted,
-		Limit:          len(wanted),
-		AllowGlobal:    true,
+		PrincipalID: req.Caller.PrincipalID,
+		IDs:         wanted,
+		Limit:       len(wanted),
+		AllowGlobal: true,
 	}
 	if len(req.Caller.AllowedRepositories) > 0 {
 		query.RestrictRepositories = true
@@ -66,7 +65,10 @@ func (s *service) GetRecords(ctx context.Context, req GetRecordsRequest) (*Recor
 	}
 
 	now := s.clock.Now()
-	evidenceCeiling := req.Caller.EvidenceCeiling()
+	// Verbatim source text is held to a stricter bar than a record's own
+	// statement: it is the raw material a record was normalized from, and it is
+	// the field a prompt injection would arrive in.
+	mayReadEvidence := req.Caller.Has(CapEvidence)
 
 	var (
 		details    []RecordDetail
@@ -96,7 +98,6 @@ func (s *service) GetRecords(ctx context.Context, req GetRecordsRequest) (*Recor
 			Rationale:        rec.Rationale,
 			Authority:        rec.Authority,
 			Status:           rec.Status,
-			Sensitivity:      rec.Sensitivity,
 			Scope:            rec.Scope,
 			Tags:             rec.Tags,
 			Confidence:       rec.Confidence,
@@ -111,7 +112,7 @@ func (s *service) GetRecords(ctx context.Context, req GetRecordsRequest) (*Recor
 		}
 
 		for _, src := range rec.Sources {
-			view, redacted := sourceView(src, rec, evidenceCeiling, req.IncludeEvidence, limit)
+			view, redacted := sourceView(src, mayReadEvidence, req.IncludeEvidence, limit)
 			if redacted {
 				redactedIn = append(redactedIn, rec.ID)
 			}
@@ -132,7 +133,7 @@ func (s *service) GetRecords(ctx context.Context, req GetRecordsRequest) (*Recor
 		slices.Sort(redactedIn)
 		warnings = append(warnings, Warning{
 			Code:      WarnEvidenceRedacted,
-			Message:   "verbatim evidence was withheld because this client lacks the matching evidence capability",
+			Message:   "verbatim evidence was withheld because this client lacks the evidence capability",
 			RecordIDs: slices.Compact(redactedIn),
 		})
 	}
@@ -153,7 +154,7 @@ func (s *service) GetRecords(ctx context.Context, req GetRecordsRequest) (*Recor
 // sourceView applies the evidence policy to one source. Metadata is always
 // disclosed so that the agent can tell the user where to look; the verbatim
 // excerpt is what the evidence capability gates.
-func sourceView(src Source, rec *Record, ceiling Sensitivity, include bool, limit int) (SourceView, bool) {
+func sourceView(src Source, mayRead, include bool, limit int) (SourceView, bool) {
 	view := SourceView{
 		SourceID:    src.ID,
 		Type:        src.Type,
@@ -166,11 +167,7 @@ func sourceView(src Source, rec *Record, ceiling Sensitivity, include bool, limi
 		return view, false
 	}
 
-	sensitivity := src.Sensitivity
-	if !sensitivity.Valid() {
-		sensitivity = rec.Sensitivity
-	}
-	if !sensitivity.AtMost(ceiling) {
+	if !mayRead {
 		view.Redacted = true
 		return view, true
 	}

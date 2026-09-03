@@ -136,7 +136,6 @@ func ApproveProposal(ctx context.Context, store Store, p *Proposal, approver str
 		Scope:            p.Scope.Clone(),
 		Authority:        AuthorityUser,
 		Status:           StatusActive,
-		Sensitivity:      SensitivityProject,
 		ValidationPolicy: ValidateNone,
 		Tags:             slices.Clone(p.Tags),
 		Sources:          slices.Clone(p.Evidence),
@@ -209,9 +208,6 @@ func applyEdits(rec, edits *Record) {
 	}
 	if edits.Authority != "" {
 		rec.Authority = edits.Authority
-	}
-	if edits.Sensitivity != "" {
-		rec.Sensitivity = edits.Sensitivity
 	}
 	if edits.ValidationPolicy != "" {
 		rec.ValidationPolicy = edits.ValidationPolicy

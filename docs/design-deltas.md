@@ -87,3 +87,41 @@ These are named in the design and deliberately left out of the initial version.
   would feed is complete.
 - **A local review UI.** `mecp review` shows the proposed statement beside the
   quoted evidence, which is the side-by-side comparison the design asks for.
+
+## There are no privacy labels
+
+The design gives every record one of four sensitivity levels, gives every
+client profile a ceiling, and gates verbatim evidence through a second set of
+capabilities. None of that is implemented. A record has no privacy field, and a
+profile has no ceiling.
+
+The reasoning is that every record exists to be sent to a model. A record you
+would never send does nothing, so the rule is not to store it in the first
+place. That is the same reasoning the design already applies to credentials,
+carried to its conclusion. A ladder of levels also assumes agents can be ranked
+from less to more trusted, and Claude Code and Codex are not ranked. They are
+two different companies.
+
+Removing the ladder removes something real, so what remains is worth stating.
+The principal and the repository allowlist still contain disclosure, and they
+are what keep one project's context out of another. `context:evidence` still
+separates reading a record's normalized statement from reading the verbatim
+source text it was made from, because that text is the raw material and it is
+the field a prompt injection arrives in.
+
+Two capabilities went with the levels. `context:search:project` and
+`context:search:personal` became `context:search`; `context:evidence:project`
+and `context:evidence:personal` became `context:evidence`.
+
+## A client profile is not a security control
+
+The profile is chosen by a command-line flag in the MCP host's configuration,
+so anyone who can edit that file can select any profile. On stdio that is not a
+weakness, because the process boundary is already the identity: whoever can
+launch the server runs as the user and can open the database directly.
+
+It stops being true the moment a socket or an HTTP endpoint exists. MCP's
+authorization model is built on OAuth and applies to the HTTP transports; the
+specification deliberately leaves stdio out and says credentials should come
+from the environment. So authentication and per-client limits arrive together
+with the first remote transport, and not before.

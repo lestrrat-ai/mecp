@@ -19,10 +19,9 @@ const heliumRepo = "https://github.com/lestrrat-go/helium"
 
 func agentCaller() mecp.Caller {
 	return mecp.Caller{
-		PrincipalID:    "local-user",
-		ClientID:       "claude-code",
-		Capabilities:   []mecp.Capability{mecp.CapPrepare, mecp.CapSearchProject, mecp.CapEvidenceProject},
-		MaxSensitivity: mecp.SensitivityProject,
+		PrincipalID:  "local-user",
+		ClientID:     "claude-code",
+		Capabilities: []mecp.Capability{mecp.CapPrepare, mecp.CapSearch, mecp.CapEvidence},
 	}
 }
 
@@ -62,13 +61,12 @@ func connect(t *testing.T, caller mecp.Caller, records ...*mecp.Record) *mcp.Cli
 
 func stylesheetConstraint() *mecp.Record {
 	return &mecp.Record{
-		ID:          "rec_stylesheet_constraint",
-		Kind:        mecp.KindConstraint,
-		Subject:     "untrusted stylesheets",
-		Statement:   "Untrusted XSLT stylesheets must never be executed during parsing.",
-		Scope:       mecp.Scope{Repository: heliumRepo},
-		Authority:   mecp.AuthorityRepository,
-		Sensitivity: mecp.SensitivityProject,
+		ID:        "rec_stylesheet_constraint",
+		Kind:      mecp.KindConstraint,
+		Subject:   "untrusted stylesheets",
+		Statement: "Untrusted XSLT stylesheets must never be executed during parsing.",
+		Scope:     mecp.Scope{Repository: heliumRepo},
+		Authority: mecp.AuthorityRepository,
 	}
 }
 

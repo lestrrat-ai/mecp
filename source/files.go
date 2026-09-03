@@ -26,8 +26,6 @@ import (
 type FileImporter struct {
 	// DefaultAuthority is applied to records that do not declare one.
 	DefaultAuthority mecp.Authority
-	// DefaultSensitivity is applied to records that do not declare one.
-	DefaultSensitivity mecp.Sensitivity
 	// Principal is written into scopes that do not name one, so imported files
 	// cannot silently become another principal's context.
 	Principal string
@@ -38,9 +36,8 @@ type FileImporter struct {
 // NewFileImporter returns an importer with the conservative defaults.
 func NewFileImporter(principal string) *FileImporter {
 	return &FileImporter{
-		DefaultAuthority:   mecp.AuthorityImport,
-		DefaultSensitivity: mecp.SensitivityProject,
-		Principal:          principal,
+		DefaultAuthority: mecp.AuthorityImport,
+		Principal:        principal,
 	}
 }
 
@@ -151,9 +148,6 @@ func (imp *FileImporter) applyDefaults(rec *mecp.Record, path, hash string, now 
 	}
 	if rec.Authority == "" {
 		rec.Authority = imp.DefaultAuthority
-	}
-	if rec.Sensitivity == "" {
-		rec.Sensitivity = imp.DefaultSensitivity
 	}
 	if rec.Subject == "" {
 		rec.Subject = deriveSubject(rec.Statement)
