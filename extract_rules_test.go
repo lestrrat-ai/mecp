@@ -23,7 +23,11 @@ const rulesDoc = `# Go
 - Only use github.com/stretchr/testify/require and not assert.
 `
 
-// extractService wires a service with a document store rooted at a directory
+// extractStores keeps the store each service was built over, so a test can
+// reach past the service to review what it filed.
+var extractStores = map[mecp.Service]*sqlite.Store{}
+
+// extractService wires a service with a document reader rooted at a directory
 // holding one instruction file.
 func extractService(t *testing.T) (mecp.Service, string) {
 	t.Helper()
@@ -32,17 +36,32 @@ func extractService(t *testing.T) (mecp.Service, string) {
 	docPath := filepath.Join(root, "go.md")
 	require.NoError(t, os.WriteFile(docPath, []byte(rulesDoc), 0o600))
 
-	store, err := sqlite.Open(filepath.Join(t.TempDir(), "context.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { store.Close() })
-	require.NoError(t, store.Migrate(t.Context()))
-
+	store := newExtractStore(t)
 	svc, err := mecp.New(store,
 		mecp.WithClock(mecp.FixedClock{Time: testNow}),
 		mecp.WithDocumentReader(source.NewDocumentReader([]string{root})),
 	)
 	require.NoError(t, err)
+
+	extractStores[svc] = store
+	t.Cleanup(func() { delete(extractStores, svc) })
 	return svc, docPath
+}
+
+func newExtractStore(t *testing.T) *sqlite.Store {
+	t.Helper()
+	store, err := sqlite.Open(filepath.Join(t.TempDir(), "context.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { store.Close() })
+	require.NoError(t, store.Migrate(t.Context()))
+	return store
+}
+
+func extractStore(t *testing.T, svc mecp.Service) *sqlite.Store {
+	t.Helper()
+	store, ok := extractStores[svc]
+	require.True(t, ok)
+	return store
 }
 
 func TestExtractRules(t *testing.T) {
@@ -95,7 +114,7 @@ func TestExtractRules(t *testing.T) {
 		res, err := svc.ExtractRules(t.Context(), req)
 		require.NoError(t, err)
 		require.Zero(t, res.CreatedCount)
-		require.Equal(t, 2, res.ExistingCount)
+		require.Equal(t, 2, res.PendingCount)
 	})
 
 	t.Run("the document hash is recorded so a record can go stale", func(t *testing.T) {
@@ -273,5 +292,110 @@ func TestExtractRulesRefusesDeadScopes(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, res.Accepted, 1)
 		require.Empty(t, res.Rejected)
+	})
+}
+
+func TestExtractRulesReportsDecidedCollisions(t *testing.T) {
+	svc, docPath := extractService(t)
+
+	req := mecp.ExtractRulesRequest{
+		Caller:       proposingCaller(),
+		DocumentPath: docPath,
+		Rules: []mecp.ExtractedRule{{
+			Kind:      mecp.KindConstraint,
+			Statement: "Do not use named return values in Go.",
+			Quote:     "Do not use named return values.",
+		}},
+	}
+
+	first, err := svc.ExtractRules(t.Context(), req)
+	require.NoError(t, err)
+	require.Len(t, first.Accepted, 1)
+	require.Equal(t, 1, first.CreatedCount)
+
+	t.Run("a second run while it is still pending is an acceptance", func(t *testing.T) {
+		again, err := svc.ExtractRules(t.Context(), req)
+		require.NoError(t, err)
+		require.Len(t, again.Accepted, 1)
+		require.Zero(t, again.CreatedCount)
+		require.Equal(t, 1, again.PendingCount)
+		require.Empty(t, again.Blocked)
+	})
+
+	t.Run("once rejected, refiling is reported as blocked rather than accepted", func(t *testing.T) {
+		store := extractStore(t, svc)
+		pending, err := store.QueryProposals(t.Context(), mecp.ProposalQuery{
+			Statuses: []mecp.ProposalStatus{mecp.ProposalPending},
+		})
+		require.NoError(t, err)
+		require.NotEmpty(t, pending)
+		require.NoError(t, mecp.RejectProposal(t.Context(), store, pending[0], "lestrrat", "wrong scope", testNow))
+
+		blockedRun, err := svc.ExtractRules(t.Context(), req)
+		require.NoError(t, err)
+		require.Empty(t, blockedRun.Accepted, "nothing was stored, so nothing may be reported as accepted")
+		require.Len(t, blockedRun.Blocked, 1)
+		require.Equal(t, mecp.ProposalRejected, blockedRun.Blocked[0].Status)
+		require.Contains(t, blockedRun.Blocked[0].Reason, "reopen or delete")
+		require.NotEmpty(t, blockedRun.Warnings)
+	})
+
+	t.Run("reopening lets the same rule be filed again", func(t *testing.T) {
+		store := extractStore(t, svc)
+		rejected, err := store.QueryProposals(t.Context(), mecp.ProposalQuery{
+			Statuses: []mecp.ProposalStatus{mecp.ProposalRejected},
+		})
+		require.NoError(t, err)
+		require.NotEmpty(t, rejected)
+
+		require.NoError(t, mecp.ReopenProposal(t.Context(), store, rejected[0], "scope guard added", testNow))
+
+		reopened, err := svc.ExtractRules(t.Context(), req)
+		require.NoError(t, err)
+		require.Len(t, reopened.Accepted, 1)
+		require.Empty(t, reopened.Blocked)
+	})
+}
+
+func TestReopenProposal(t *testing.T) {
+	store := newExtractStore(t)
+	ctx := t.Context()
+
+	p := &mecp.Proposal{
+		ID: "prop_x", Key: "k", Status: mecp.ProposalPending, PrincipalID: "lestrrat",
+		ClientID: "claude-code", Kind: mecp.KindDecision, Subject: "s",
+		Statement: "A rule.", CreatedAt: testNow,
+	}
+	_, _, err := store.PutProposal(ctx, p)
+	require.NoError(t, err)
+
+	t.Run("a pending proposal cannot be reopened", func(t *testing.T) {
+		require.Error(t, mecp.ReopenProposal(ctx, store, p, "", testNow))
+	})
+
+	t.Run("a rejection reopens and keeps both notes", func(t *testing.T) {
+		require.NoError(t, mecp.RejectProposal(ctx, store, p, "lestrrat", "wrong scope", testNow))
+		require.NoError(t, mecp.ReopenProposal(ctx, store, p, "scope guard added", testNow))
+
+		got, err := store.GetProposal(ctx, "prop_x")
+		require.NoError(t, err)
+		require.Equal(t, mecp.ProposalPending, got.Status)
+		require.Nil(t, got.DecidedAt)
+		require.Contains(t, got.DecisionNote, "wrong scope")
+		require.Contains(t, got.DecisionNote, "scope guard added")
+	})
+
+	t.Run("an approved proposal points at its record instead", func(t *testing.T) {
+		approved := &mecp.Proposal{
+			ID: "prop_y", Key: "k2", Status: mecp.ProposalApproved, PrincipalID: "lestrrat",
+			ClientID: "claude-code", Kind: mecp.KindDecision, Subject: "s",
+			Statement: "Another rule.", CreatedAt: testNow, ResultRecordID: "rec_abc",
+		}
+		_, _, err := store.PutProposal(ctx, approved)
+		require.NoError(t, err)
+
+		err = mecp.ReopenProposal(ctx, store, approved, "", testNow)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "rec_abc")
 	})
 }

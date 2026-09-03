@@ -316,14 +316,24 @@ func (s *Server) handleExtractRules(ctx context.Context, _ *mcp.CallToolRequest,
 
 func describeExtraction(res *mecp.ExtractRulesResult) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%d rule(s) queued for review from %s (%d new, %d already pending).\n",
-		len(res.Accepted), res.DocumentPath, res.CreatedCount, res.ExistingCount)
+	fmt.Fprintf(&b, "%d rule(s) queued for review from %s (%d new, %d already waiting).\n",
+		len(res.Accepted), res.DocumentPath, res.CreatedCount, res.PendingCount)
+
 	if len(res.Rejected) > 0 {
-		fmt.Fprintf(&b, "%d rule(s) refused:\n", len(res.Rejected))
+		fmt.Fprintf(&b, "\n%d rule(s) REFUSED and not stored:\n", len(res.Rejected))
 		for _, r := range res.Rejected {
-			fmt.Fprintf(&b, "- %s: %s\n", r.Reason, r.Statement)
+			fmt.Fprintf(&b, "- %s\n  reason: %s\n", r.Statement, r.Reason)
 		}
 	}
-	b.WriteString("Nothing is active until the user approves it with \"mecp review\".")
+
+	if len(res.Blocked) > 0 {
+		fmt.Fprintf(&b, "\n%d rule(s) NOT STORED because the same quote was already reviewed:\n", len(res.Blocked))
+		for _, blocked := range res.Blocked {
+			fmt.Fprintf(&b, "- %s\n  %s\n", blocked.Statement, blocked.Reason)
+		}
+		b.WriteString("\nDo not refile these; they will be blocked again until the user acts.\n")
+	}
+
+	b.WriteString("\nNothing is active until the user approves it with \"mecp review\".")
 	return b.String()
 }

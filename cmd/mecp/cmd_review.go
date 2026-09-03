@@ -22,6 +22,7 @@ through repetition.`,
 			reviewShowCommand(),
 			reviewApproveCommand(),
 			reviewRejectCommand(),
+			reviewReopenCommand(),
 		},
 	}
 }
@@ -204,6 +205,46 @@ agent proposes it again.`,
 		),
 		Action: runReviewReject,
 	}
+}
+
+func reviewReopenCommand() *cli.Command {
+	return &cli.Command{
+		Name:      "reopen",
+		Usage:     "put a rejected proposal back in the queue",
+		ArgsUsage: "<proposal-id>",
+		Description: `A rejection is permanent for the agent that filed it: the same rule from the
+same document collides with the rejected proposal and is silently discarded.
+Reopen it when you turned it down for a reason that has since been fixed, rather
+than because the rule was wrong.`,
+		Flags: append(globalFlags(),
+			&cli.StringFlag{Name: "note", Usage: "why it is being reopened"},
+		),
+		Action: runReviewReopen,
+	}
+}
+
+func runReviewReopen(ctx context.Context, cmd *cli.Command) error {
+	id := cmd.Args().First()
+	if id == "" {
+		return fmt.Errorf(`a proposal ID is required`)
+	}
+
+	rt, err := openRuntime(ctx, cmd, false)
+	if err != nil {
+		return err
+	}
+	defer rt.Close()
+
+	p, err := rt.store.GetProposal(ctx, id)
+	if err != nil {
+		return err
+	}
+	if err := mecp.ReopenProposal(ctx, rt.store, p, cmd.String("note"), time.Now().UTC()); err != nil {
+		return err
+	}
+
+	fmt.Printf("%s is pending review again\n", p.ID)
+	return nil
 }
 
 func runReviewReject(ctx context.Context, cmd *cli.Command) error {

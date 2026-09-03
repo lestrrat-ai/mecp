@@ -86,15 +86,30 @@ type RejectedRule struct {
 	Reason    string `json:"reason"`
 }
 
+// BlockedRule reports a rule that matches a proposal already decided. It is
+// neither accepted nor refused: the rule is fine, but the same quote from the
+// same document has been ruled on before, so filing it again would either
+// duplicate a record or reopen a decision behind the user's back.
+type BlockedRule struct {
+	Statement  string         `json:"statement"`
+	ProposalID string         `json:"proposal_id"`
+	Status     ProposalStatus `json:"status"`
+	Reason     string         `json:"reason"`
+}
+
 // ExtractRulesResult is the outcome of one extraction.
 type ExtractRulesResult struct {
-	DocumentPath  string         `json:"document_path"`
-	ContentHash   string         `json:"content_hash"`
-	Accepted      []AcceptedRule `json:"accepted"`
-	Rejected      []RejectedRule `json:"rejected,omitempty"`
-	CreatedCount  int            `json:"created_count"`
-	ExistingCount int            `json:"existing_count"`
-	Warnings      []Warning      `json:"warnings,omitempty"`
+	DocumentPath string         `json:"document_path"`
+	ContentHash  string         `json:"content_hash"`
+	Accepted     []AcceptedRule `json:"accepted"`
+	Rejected     []RejectedRule `json:"rejected,omitempty"`
+	Blocked      []BlockedRule  `json:"blocked,omitempty"`
+	// CreatedCount is how many proposals this call added to the queue.
+	CreatedCount int `json:"created_count"`
+	// PendingCount is how many were already waiting for review from an earlier
+	// run of the same extraction.
+	PendingCount int       `json:"pending_count"`
+	Warnings     []Warning `json:"warnings,omitempty"`
 }
 
 // ExtractRules turns rules a caller read out of an instruction document into
@@ -141,16 +156,19 @@ func (s *service) ExtractRules(ctx context.Context, req ExtractRulesRequest) (*E
 	result := &ExtractRulesResult{DocumentPath: doc.Path, ContentHash: doc.ContentHash}
 
 	for _, rule := range req.Rules {
-		accepted, rejected := s.extractOne(ctx, req, rule, doc, lines, now)
-		if rejected != nil {
-			result.Rejected = append(result.Rejected, *rejected)
-			continue
-		}
-		result.Accepted = append(result.Accepted, *accepted)
-		if accepted.Created {
-			result.CreatedCount++
-		} else {
-			result.ExistingCount++
+		outcome := s.extractOne(ctx, req, rule, doc, lines, now)
+		switch {
+		case outcome.rejected != nil:
+			result.Rejected = append(result.Rejected, *outcome.rejected)
+		case outcome.blocked != nil:
+			result.Blocked = append(result.Blocked, *outcome.blocked)
+		default:
+			result.Accepted = append(result.Accepted, *outcome.accepted)
+			if outcome.accepted.Created {
+				result.CreatedCount++
+			} else {
+				result.PendingCount++
+			}
 		}
 	}
 
@@ -158,8 +176,17 @@ func (s *service) ExtractRules(ctx context.Context, req ExtractRulesRequest) (*E
 		result.Warnings = append(result.Warnings, Warning{
 			Code: WarnSourceUnavailable,
 			Message: fmt.Sprintf(
-				"%d rule(s) were refused because their quoted text does not appear in %s; re-read the document and quote it exactly",
-				len(result.Rejected), doc.Path),
+				"%d rule(s) were refused; see each one's reason and correct it rather than refiling as is",
+				len(result.Rejected)),
+		})
+	}
+	if len(result.Blocked) > 0 {
+		result.Warnings = append(result.Warnings, Warning{
+			Code: WarnRecordNotFound,
+			Message: fmt.Sprintf(
+				"%d rule(s) were NOT stored because the same quote has already been reviewed and decided; "+
+					"the user must reopen or delete those proposals before they can be filed again",
+				len(result.Blocked)),
 		})
 	}
 
@@ -172,26 +199,35 @@ func (s *service) ExtractRules(ctx context.Context, req ExtractRulesRequest) (*E
 	return result, nil
 }
 
-func (s *service) extractOne(ctx context.Context, req ExtractRulesRequest, rule ExtractedRule, doc *Document, lines []string, now time.Time) (*AcceptedRule, *RejectedRule) {
+// extractOutcome is what happened to one rule. Exactly one field is set.
+type extractOutcome struct {
+	accepted *AcceptedRule
+	rejected *RejectedRule
+	blocked  *BlockedRule
+}
+
+func refuse(r RejectedRule) extractOutcome { return extractOutcome{rejected: &r} }
+
+func (s *service) extractOne(ctx context.Context, req ExtractRulesRequest, rule ExtractedRule, doc *Document, lines []string, now time.Time) extractOutcome {
 	statement := strings.TrimSpace(rule.Statement)
 	if statement == "" {
-		return nil, &RejectedRule{Quote: rule.Quote, Reason: "the rule has no statement"}
+		return refuse(RejectedRule{Quote: rule.Quote, Reason: "the rule has no statement"})
 	}
 	if !rule.Kind.Valid() {
-		return nil, &RejectedRule{Statement: statement, Quote: rule.Quote,
-			Reason: fmt.Sprintf("unknown record kind %q", rule.Kind)}
+		return refuse(RejectedRule{Statement: statement, Quote: rule.Quote,
+			Reason: fmt.Sprintf("unknown record kind %q", rule.Kind)})
 	}
 
 	quote := strings.TrimSpace(rule.Quote)
 	if quote == "" {
-		return nil, &RejectedRule{Statement: statement,
-			Reason: "the rule quotes nothing, so it cannot be checked against the document"}
+		return refuse(RejectedRule{Statement: statement,
+			Reason: "the rule quotes nothing, so it cannot be checked against the document"})
 	}
 
 	line := findQuote(lines, quote)
 	if line == 0 {
-		return nil, &RejectedRule{Statement: statement, Quote: quote,
-			Reason: "the quoted text does not appear in the document"}
+		return refuse(RejectedRule{Statement: statement, Quote: quote,
+			Reason: "the quoted text does not appear in the document"})
 	}
 
 	scope := req.Scope.Clone()
@@ -207,13 +243,13 @@ func (s *service) extractOne(ctx context.Context, req ExtractRulesRequest, rule 
 	// useless as a rule the document does not contain, so it is refused for the
 	// same reason and at the same moment.
 	if len(scope.Conditions) > 0 {
-		return nil, &RejectedRule{Statement: statement, Quote: quote,
+		return refuse(RejectedRule{Statement: statement, Quote: quote,
 			Reason: "the scope uses a condition, which only matches when a caller supplies it; " +
-				"scope by repository, path, or task kind instead"}
+				"scope by repository, path, or task kind instead"})
 	}
 	if scope.Repository != "" && !req.Caller.RepositoryAllowed(scope.Repository) {
-		return nil, &RejectedRule{Statement: statement, Quote: quote,
-			Reason: fmt.Sprintf("client may not propose records for repository %s", scope.Repository)}
+		return refuse(RejectedRule{Statement: statement, Quote: quote,
+			Reason: fmt.Sprintf("client may not propose records for repository %s", scope.Repository)})
 	}
 
 	subject := strings.TrimSpace(rule.Subject)
@@ -251,17 +287,31 @@ func (s *service) extractOne(ctx context.Context, req ExtractRulesRequest, rule 
 
 	stored, created, err := s.store.PutProposal(ctx, proposal)
 	if err != nil {
-		return nil, &RejectedRule{Statement: statement, Quote: quote,
-			Reason: "could not be stored: " + err.Error()}
+		return refuse(RejectedRule{Statement: statement, Quote: quote,
+			Reason: "could not be stored: " + err.Error()})
 	}
 
-	return &AcceptedRule{
+	// A key that matches an already-decided proposal means nothing was stored.
+	// Reporting that as an acceptance is how a caller comes to believe it filed
+	// rules it did not.
+	if !created && stored.Status != ProposalPending {
+		return extractOutcome{blocked: &BlockedRule{
+			Statement:  statement,
+			ProposalID: stored.ID,
+			Status:     stored.Status,
+			Reason: fmt.Sprintf(
+				"this quote was already %s, so nothing was stored; ask the user to reopen or delete proposal %s",
+				stored.Status, stored.ID),
+		}}
+	}
+
+	return extractOutcome{accepted: &AcceptedRule{
 		ProposalID: stored.ID,
 		Subject:    stored.Subject,
 		Statement:  stored.Statement,
 		Line:       line,
 		Created:    created,
-	}, nil
+	}}
 }
 
 // findQuote returns the 1-based line where a quote begins, or zero when the

@@ -189,6 +189,38 @@ func RejectProposal(ctx context.Context, store Store, p *Proposal, reviewer, not
 	return nil
 }
 
+// ReopenProposal puts a decided proposal back in the queue.
+//
+// A rejection is meant to stop the same suggestion coming back forever, which
+// is right when the idea was wrong and wrong when only its packaging was. The
+// proposal key makes a rejection permanent otherwise: the same rule from the
+// same document collides with it and is silently discarded.
+//
+// Like approval, this is not reachable from any agent-facing tool.
+func ReopenProposal(ctx context.Context, store Store, p *Proposal, note string, now time.Time) error {
+	if p.Status == ProposalPending {
+		return errorf(CodeInvalidRecord, "proposal %s is already pending review", p.ID)
+	}
+	if p.Status == ProposalApproved && p.ResultRecordID != "" {
+		return errorf(CodeInvalidRecord,
+			"proposal %s was approved as record %s; edit or supersede that record instead of reopening the proposal",
+			p.ID, p.ResultRecordID)
+	}
+
+	p.Status = ProposalPending
+	p.DecidedAt = nil
+	p.DecidedBy = ""
+	// The earlier decision's note is kept alongside the reason for reopening,
+	// so the history reads as a sequence rather than being overwritten.
+	if note != "" {
+		p.DecisionNote = strings.TrimSpace(p.DecisionNote + "\nreopened " + now.UTC().Format(time.RFC3339) + ": " + note)
+	}
+	if err := store.UpdateProposal(ctx, p); err != nil {
+		return wrapf(CodeStorage, err, "cannot reopen proposal %s", p.ID)
+	}
+	return nil
+}
+
 // applyEdits overlays the reviewer's changes onto the record built from a
 // proposal. Only fields the reviewer actually set are taken.
 func applyEdits(rec, edits *Record) {
