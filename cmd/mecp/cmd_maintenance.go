@@ -117,11 +117,10 @@ func runValidate(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 
-	var resolver mecp.SourceResolver
-	if rt.cfg.Validation.Git {
-		resolver = source.NewGitResolver()
-	}
-	validator := mecp.NewValidator(resolver)
+	validator := mecp.NewValidator(source.NewGitResolver(
+		source.WithGitEnabled(rt.cfg.Validation.Git),
+		source.WithAllowedRoots(rt.cfg.DocumentRoots),
+	))
 	ws := workspaceFrom(cmd)
 	now := time.Now().UTC()
 

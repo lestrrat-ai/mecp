@@ -129,6 +129,10 @@ type ExtractRulesResult struct {
 	ReviewCount int `json:"review_count"`
 	// PendingCount is how many were already waiting from an earlier run.
 	PendingCount int `json:"pending_count"`
+	// Retired names records from this document whose quoted line no longer
+	// appears in it, which happens when the document is edited between
+	// extractions.
+	Retired []string `json:"retired,omitempty"`
 	// Uncovered lists lines the document presents as rules that no submitted
 	// quote covers. It is advice, not an accusation: skipping prose is often
 	// right, and skipping a table of specifics usually is not.
@@ -213,6 +217,21 @@ func (s *service) ExtractRules(ctx context.Context, req ExtractRulesRequest) (*E
 				len(result.Rejected)),
 		})
 	}
+	retired, err := s.retireVanishedRules(ctx, doc, now)
+	if err != nil {
+		return nil, err
+	}
+	result.Retired = retired
+	if len(retired) > 0 {
+		result.Warnings = append(result.Warnings, Warning{
+			Code: WarnSupersededRecord,
+			Message: fmt.Sprintf(
+				"%d record(s) from this document quoted lines it no longer contains, and were archived",
+				len(retired)),
+			RecordIDs: retired,
+		})
+	}
+
 	result.Uncovered = uncoveredLines(doc, req.Rules)
 	if len(result.Uncovered) > 0 {
 		result.Warnings = append(result.Warnings, Warning{
@@ -444,6 +463,62 @@ func describeFlags(flags []ReviewFlag) string {
 		parts = append(parts, string(f.Reason))
 	}
 	return strings.Join(parts, ", ")
+}
+
+// retireVanishedRules archives records drawn from this document whose quoted
+// line is no longer in it.
+//
+// Editing a document gives its rules new quotes and therefore new records, and
+// without this the old ones stay active while pointing at text that is gone.
+// They are archived rather than deleted, so the history of what the document
+// used to say survives.
+func (s *service) retireVanishedRules(ctx context.Context, doc *Document, now time.Time) ([]string, error) {
+	existing, err := s.store.QueryRecords(ctx, RecordQuery{
+		Statuses: []RecordStatus{StatusActive},
+		Limit:    maxExtractedRules * 4,
+	})
+	if err != nil {
+		return nil, wrapf(CodeStorage, err, "cannot load records for this document")
+	}
+
+	lines := strings.Split(doc.Content, "\n")
+	locator := "file://" + doc.Path
+
+	var retired []string
+	for _, rec := range existing {
+		quote, ok := quotedFrom(rec, locator)
+		if !ok {
+			continue
+		}
+		if findQuote(lines, quote) > 0 {
+			continue
+		}
+		rec.Status = StatusArchived
+		rec.UpdatedAt = now
+		if err := s.store.PutRecord(ctx, rec); err != nil {
+			return nil, wrapf(CodeStorage, err, "cannot archive record %s", rec.ID)
+		}
+		retired = append(retired, rec.ID)
+	}
+	return retired, nil
+}
+
+// quotedFrom returns the text a record quoted from one document, with the line
+// prefix the extraction added stripped back off.
+func quotedFrom(rec *Record, locator string) (string, bool) {
+	for _, src := range rec.Sources {
+		if src.Locator != locator {
+			continue
+		}
+		quote := src.ExactExcerpt
+		if _, rest, ok := strings.Cut(quote, ": "); ok && strings.HasPrefix(quote, "line ") {
+			quote = rest
+		}
+		if quote != "" {
+			return quote, true
+		}
+	}
+	return "", false
 }
 
 // uncoveredLines reports what the document's own structure marks as a rule that

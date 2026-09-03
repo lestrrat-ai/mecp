@@ -112,6 +112,10 @@ func (r *DocumentReader) resolve(path string) (string, error) {
 		path, strings.Join(r.roots, ", "))
 }
 
+// ExpandHome resolves a leading ~ so configured roots can be written the way a
+// person writes them.
+func ExpandHome(path string) string { return expandHome(path) }
+
 func expandHome(path string) string {
 	if path != "~" && !strings.HasPrefix(path, "~/") {
 		return path

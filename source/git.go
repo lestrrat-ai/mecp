@@ -29,6 +29,14 @@ var ErrUnverifiable = errors.New("source cannot be verified locally")
 type GitResolver struct {
 	gitPath string
 	timeout time.Duration
+	// gitEnabled allows the policies that shell out. File existence and content
+	// hashing never do, so they run either way.
+	gitEnabled bool
+	// extraRoots are directories a source may live in besides the workspace.
+	// A record extracted from an instruction file points at that file wherever
+	// it is, and validating it from inside some repository must not be refused
+	// just because the document sits elsewhere.
+	extraRoots []string
 }
 
 // GitOption configures NewGitResolver.
@@ -40,9 +48,20 @@ func WithGitPath(path string) GitOption { return func(r *GitResolver) { r.gitPat
 // WithGitTimeout bounds how long a single git invocation may take.
 func WithGitTimeout(d time.Duration) GitOption { return func(r *GitResolver) { r.timeout = d } }
 
+// WithAllowedRoots names directories, besides the workspace, whose files may be
+// validated. Pass the same document roots the reader was given.
+func WithAllowedRoots(roots []string) GitOption {
+	return func(r *GitResolver) { r.extraRoots = append(r.extraRoots, roots...) }
+}
+
+// WithGitEnabled allows the policies that run git. With it off, those report
+// that they could not check rather than failing, and the file and hash checks
+// carry on unaffected.
+func WithGitEnabled(v bool) GitOption { return func(r *GitResolver) { r.gitEnabled = v } }
+
 // NewGitResolver returns a resolver backed by the git executable.
 func NewGitResolver(options ...GitOption) *GitResolver {
-	r := &GitResolver{gitPath: "git", timeout: 10 * time.Second}
+	r := &GitResolver{gitPath: "git", timeout: 10 * time.Second, gitEnabled: true}
 	for _, opt := range options {
 		opt(r)
 	}
@@ -67,6 +86,9 @@ func (r *GitResolver) Exists(ctx context.Context, src mecp.Source, ws mecp.Works
 		return !info.IsDir(), nil
 
 	case mecp.SourceCommit:
+		if !r.gitEnabled {
+			return false, ErrUnverifiable
+		}
 		root, err := workspaceRoot(ws)
 		if err != nil {
 			return false, err
@@ -107,7 +129,7 @@ func (r *GitResolver) ContentHash(_ context.Context, src mecp.Source, ws mecp.Wo
 // equal to, the workspace revision. A decision recorded against a commit that
 // is not in the current history describes a different line of development.
 func (r *GitResolver) RevisionApplies(ctx context.Context, src mecp.Source, ws mecp.Workspace) (bool, error) {
-	if src.Revision == "" || ws.Revision == "" {
+	if !r.gitEnabled || src.Revision == "" || ws.Revision == "" {
 		return false, ErrUnverifiable
 	}
 	root, err := workspaceRoot(ws)
@@ -144,6 +166,17 @@ func (r *GitResolver) resolvePath(locator string, ws mecp.Workspace) (string, er
 	path := strings.TrimPrefix(locator, "file://")
 	if path == "" {
 		return "", ErrUnverifiable
+	}
+
+	// A document the user named in configuration is already vetted, so an
+	// absolute path inside one of those roots is readable wherever the caller
+	// happens to be working.
+	if filepath.IsAbs(path) {
+		for _, root := range r.extraRoots {
+			if contained, err := ContainedPath(expandHome(root), path); err == nil {
+				return contained, nil
+			}
+		}
 	}
 
 	root, err := workspaceRoot(ws)

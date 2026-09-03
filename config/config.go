@@ -98,8 +98,11 @@ type Defaults struct {
 type Validation struct {
 	// TTL bounds how long a freshness result is reused.
 	TTL Duration `yaml:"ttl"`
-	// Git enables revision and content-hash validation against local
-	// repositories. It shells out to git, so it is opt-in.
+	// Git enables the commit-ancestor policy, which shells out to git and so is
+	// opt-in. Checking that a file still exists and still hashes the same needs
+	// no git and is always on: without it, a record extracted from a document
+	// never notices the document changing, which is the one thing that makes
+	// activating it without review safe.
 	Git bool `yaml:"git"`
 }
 

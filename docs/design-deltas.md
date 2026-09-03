@@ -229,3 +229,32 @@ can tell the difference.
 That moved the parser from `source` into the domain package, since `source`
 imports the domain and cannot be imported back. `mecp distill` and the coverage
 check now share one implementation rather than two that could drift.
+
+## File validation is always on; only git is optional
+
+`validation.git` used to gate the whole source resolver, so with it off nothing
+was validated at all and every record read `unverified`. That silently removed
+the thing that makes activating an extracted rule without review defensible: a
+record carries its document's hash, and editing the document is supposed to mark
+it stale.
+
+Checking that a file exists and still hashes the same needs no git. Only the
+commit-ancestor policy does. So the resolver is always wired, and the flag now
+gates only the policies that shell out.
+
+Validation also accepts any path inside a configured document root, not just
+inside the workspace. A record extracted from an instruction file points at that
+file wherever it lives, and refusing to check it because the caller happens to
+be working in some other repository would defeat the purpose. The roots are the
+ones the user named, so nothing widens what is reachable.
+
+## Editing a document retires the rules that vanished from it
+
+Records are keyed on the document and the quote, so rewording a line gives it a
+new key and a new record. Without anything else, the old record stays active
+while quoting text the document no longer contains.
+
+Extraction therefore archives any record drawn from that document whose quoted
+line is no longer in it, and reports which ones. They are archived rather than
+deleted, so what the document used to say remains readable as history, and only
+records from the document being extracted are touched.

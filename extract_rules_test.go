@@ -3,6 +3,7 @@ package mecp_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/lestrrat-ai/mecp"
@@ -526,5 +527,93 @@ func TestRecordIdentityIsStableAcrossQuotingAndPaths(t *testing.T) {
 
 		want := mecp.RecordIDForKey(mecp.DocumentRuleKey(pending[0].Evidence[0].Locator[len("file://"):], "Do not use named return values."))
 		require.Equal(t, want, rec.ID)
+	})
+}
+
+func TestExtractRulesRetiresVanishedRules(t *testing.T) {
+	root := t.TempDir()
+	docPath := filepath.Join(root, "go.md")
+	require.NoError(t, os.WriteFile(docPath, []byte(rulesDoc), 0o600))
+
+	store := newExtractStore(t)
+	svc, err := mecp.New(store,
+		mecp.WithClock(mecp.FixedClock{Time: testNow}),
+		mecp.WithDocumentReader(source.NewDocumentReader([]string{root})),
+	)
+	require.NoError(t, err)
+
+	first, err := svc.ExtractRules(t.Context(), mecp.ExtractRulesRequest{
+		Caller: proposingCaller(), DocumentPath: docPath,
+		Rules: []mecp.ExtractedRule{namedReturnRule()},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, first.ActivatedCount)
+	gone := first.Accepted[0].RecordID
+
+	// The document is edited: the rule is reworded, so its old quote is no
+	// longer anywhere in the file.
+	edited := strings.Replace(rulesDoc,
+		"- Do not use named return values.",
+		"- Never use named return values in exported functions.", 1)
+	require.NotEqual(t, rulesDoc, edited)
+	require.NoError(t, os.WriteFile(docPath, []byte(edited), 0o600))
+
+	second, err := svc.ExtractRules(t.Context(), mecp.ExtractRulesRequest{
+		Caller: proposingCaller(), DocumentPath: docPath,
+		Rules: []mecp.ExtractedRule{{
+			Kind:      mecp.KindConstraint,
+			Subject:   "style",
+			Statement: "Never use named return values in exported Go functions.",
+			Quote:     "Never use named return values in exported functions.",
+		}},
+	})
+	require.NoError(t, err)
+
+	t.Run("the reworded rule becomes its own record", func(t *testing.T) {
+		require.Equal(t, 1, second.ActivatedCount)
+		require.NotEqual(t, gone, second.Accepted[0].RecordID)
+	})
+
+	t.Run("the record quoting the vanished line is archived", func(t *testing.T) {
+		require.Contains(t, second.Retired, gone)
+
+		rec, err := store.GetRecord(t.Context(), gone)
+		require.NoError(t, err)
+		require.Equal(t, mecp.StatusArchived, rec.Status)
+	})
+
+	t.Run("the archiving is reported rather than silent", func(t *testing.T) {
+		require.NotEmpty(t, second.Warnings)
+	})
+
+	t.Run("only the stale one goes; the new rule stays active", func(t *testing.T) {
+		active, err := store.QueryRecords(t.Context(), mecp.RecordQuery{
+			Statuses: []mecp.RecordStatus{mecp.StatusActive},
+		})
+		require.NoError(t, err)
+		require.Len(t, active, 1)
+		require.Equal(t, second.Accepted[0].RecordID, active[0].ID)
+	})
+
+	t.Run("a record from another document is left alone", func(t *testing.T) {
+		other := &mecp.Record{
+			ID: "rec_elsewhere", Kind: mecp.KindConstraint, Subject: "elsewhere",
+			Statement: "A rule from a different document.",
+			Authority: mecp.AuthorityUser,
+			Sources:   []mecp.Source{{ID: "s", Type: mecp.SourceFile, Locator: "file:///other/doc.md"}},
+		}
+		other.Normalize(testNow)
+		require.NoError(t, store.PutRecord(t.Context(), other))
+
+		res, err := svc.ExtractRules(t.Context(), mecp.ExtractRulesRequest{
+			Caller: proposingCaller(), DocumentPath: docPath,
+			Rules: []mecp.ExtractedRule{{
+				Kind: mecp.KindConstraint, Subject: "style",
+				Statement: "Never use named return values in exported Go functions.",
+				Quote:     "Never use named return values in exported functions.",
+			}},
+		})
+		require.NoError(t, err)
+		require.NotContains(t, res.Retired, "rec_elsewhere")
 	})
 }

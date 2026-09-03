@@ -65,9 +65,13 @@ func openRuntime(ctx context.Context, cmd *cli.Command, readOnly bool) (*runtime
 	if len(cfg.RepositoryAliases) > 0 {
 		options = append(options, mecp.WithRepositoryAliases(cfg.RepositoryAliases))
 	}
-	if cfg.Validation.Git {
-		options = append(options, mecp.WithSourceResolver(source.NewGitResolver()))
-	}
+	// The resolver is always wired. Its file and hash checks need no git, and
+	// the commit-ancestor policy reports "unverified" rather than failing when
+	// git is not wanted.
+	options = append(options, mecp.WithSourceResolver(source.NewGitResolver(
+		source.WithGitEnabled(cfg.Validation.Git),
+		source.WithAllowedRoots(cfg.DocumentRoots),
+	)))
 	if len(cfg.DocumentRoots) > 0 {
 		options = append(options, mecp.WithDocumentReader(source.NewDocumentReader(cfg.DocumentRoots)))
 	}
