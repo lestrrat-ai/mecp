@@ -153,16 +153,7 @@ type proposeRecordArgs struct {
 }
 
 func (s *Server) handleProposeRecord(ctx context.Context, _ *mcp.CallToolRequest, args proposeRecordArgs) (*mcp.CallToolResult, *mecp.ProposalResult, error) {
-	var scope mecp.Scope
-	if args.Scope != nil {
-		scope.Repository = args.Scope.Repository
-		scope.BranchPatterns = args.Scope.BranchPatterns
-		scope.PathPatterns = args.Scope.PathPatterns
-		scope.Conditions = args.Scope.Conditions
-		for _, k := range args.Scope.TaskKinds {
-			scope.TaskKinds = append(scope.TaskKinds, mecp.TaskKind(k))
-		}
-	}
+	scope := args.Scope.scope()
 
 	evidence := make([]mecp.Source, 0, len(args.Evidence))
 	for _, e := range args.Evidence {
@@ -260,3 +251,79 @@ func describeRecords(res *mecp.RecordResult) string {
 }
 
 func asDomainError(err error, target **mecp.Error) bool { return errors.As(err, target) }
+
+type extractedRuleArgs struct {
+	Kind      string     `json:"kind"`
+	Subject   string     `json:"subject,omitempty"`
+	Statement string     `json:"statement"`
+	Rationale string     `json:"rationale,omitempty"`
+	Quote     string     `json:"quote"`
+	Tags      []string   `json:"tags,omitempty"`
+	Scope     *scopeArgs `json:"scope,omitempty"`
+}
+
+type extractRulesArgs struct {
+	DocumentPath string              `json:"document_path"`
+	Scope        *scopeArgs          `json:"scope,omitempty"`
+	Rules        []extractedRuleArgs `json:"rules"`
+}
+
+func (a *scopeArgs) scope() mecp.Scope {
+	if a == nil {
+		return mecp.Scope{}
+	}
+	out := mecp.Scope{
+		Repository:     a.Repository,
+		BranchPatterns: a.BranchPatterns,
+		PathPatterns:   a.PathPatterns,
+		Conditions:     a.Conditions,
+	}
+	for _, k := range a.TaskKinds {
+		out.TaskKinds = append(out.TaskKinds, mecp.TaskKind(k))
+	}
+	return out
+}
+
+func (s *Server) handleExtractRules(ctx context.Context, _ *mcp.CallToolRequest, args extractRulesArgs) (*mcp.CallToolResult, *mecp.ExtractRulesResult, error) {
+	rules := make([]mecp.ExtractedRule, 0, len(args.Rules))
+	for _, r := range args.Rules {
+		rule := mecp.ExtractedRule{
+			Kind:      mecp.RecordKind(r.Kind),
+			Subject:   r.Subject,
+			Statement: r.Statement,
+			Rationale: r.Rationale,
+			Quote:     r.Quote,
+			Tags:      r.Tags,
+		}
+		if r.Scope != nil {
+			scope := r.Scope.scope()
+			rule.Scope = &scope
+		}
+		rules = append(rules, rule)
+	}
+
+	res, err := s.svc.ExtractRules(ctx, mecp.ExtractRulesRequest{
+		Caller:       s.caller,
+		DocumentPath: args.DocumentPath,
+		Scope:        args.Scope.scope(),
+		Rules:        rules,
+	})
+	if err != nil {
+		return nil, nil, toolError(err)
+	}
+	return textResult(describeExtraction(res)), res, nil
+}
+
+func describeExtraction(res *mecp.ExtractRulesResult) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d rule(s) queued for review from %s (%d new, %d already pending).\n",
+		len(res.Accepted), res.DocumentPath, res.CreatedCount, res.ExistingCount)
+	if len(res.Rejected) > 0 {
+		fmt.Fprintf(&b, "%d rule(s) refused:\n", len(res.Rejected))
+		for _, r := range res.Rejected {
+			fmt.Fprintf(&b, "- %s: %s\n", r.Reason, r.Statement)
+		}
+	}
+	b.WriteString("Nothing is active until the user approves it with \"mecp review\".")
+	return b.String()
+}

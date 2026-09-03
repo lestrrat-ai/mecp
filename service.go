@@ -25,6 +25,9 @@ type Service interface {
 	GetRecords(ctx context.Context, req GetRecordsRequest) (*RecordResult, error)
 	// ProposeRecord files an inactive proposal for user review.
 	ProposeRecord(ctx context.Context, req ProposeRecordRequest) (*ProposalResult, error)
+	// ExtractRules turns rules read out of an instruction document into
+	// pending proposals, checking each quote against the document itself.
+	ExtractRules(ctx context.Context, req ExtractRulesRequest) (*ExtractRulesResult, error)
 }
 
 // PrepareTaskRequest asks for the context that matters for one task.
@@ -185,6 +188,7 @@ type service struct {
 	packer        Packer
 	validator     Validator
 	audit         AuditSink
+	documents     DocumentStore
 	contextTTL    time.Duration
 	maxCandidates int
 	aliases       map[string]string
@@ -245,6 +249,8 @@ func New(store Store, options ...ServiceOption) (Service, error) {
 			validationTTL = option.MustGet[time.Duration](opt)
 		case identAuditSink:
 			svc.audit = option.MustGet[AuditSink](opt)
+		case identDocumentStore:
+			svc.documents = option.MustGet[DocumentStore](opt)
 		case identContextTTL:
 			svc.contextTTL = option.MustGet[time.Duration](opt)
 		case identMaxCandidates:

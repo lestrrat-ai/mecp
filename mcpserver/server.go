@@ -29,6 +29,7 @@ const (
 	ToolSearch        = "context_search"
 	ToolGetRecords    = "context_get_records"
 	ToolProposeRecord = "context_propose_record"
+	ToolExtractRules  = "context_extract_rules"
 )
 
 // ServerName and ServerVersion identify this implementation to hosts.
@@ -163,6 +164,19 @@ func (s *Server) register() {
 			},
 			InputSchema: proposeRecordSchema(),
 		}, s.handleProposeRecord)
+
+		mcp.AddTool(s.mcp, &mcp.Tool{
+			Name:        ToolExtractRules,
+			Title:       "Extract rules from an instruction document",
+			Description: extractRulesDescription,
+			Annotations: &mcp.ToolAnnotations{
+				ReadOnlyHint:    false,
+				IdempotentHint:  true,
+				DestructiveHint: ptr(false),
+				OpenWorldHint:   ptr(false),
+			},
+			InputSchema: extractRulesSchema(),
+		}, s.handleExtractRules)
 	}
 }
 
@@ -195,6 +209,20 @@ const proposeRecordDescription = `Propose a new or superseding context record fo
 The proposal stays inactive, changes nothing, and cannot override existing context. Use it only
 when the current interaction contains clear supporting evidence, and quote that evidence rather
 than paraphrasing it. Repeating the same proposal_key returns the existing proposal.`
+
+const extractRulesDescription = `Read an instruction document such as a CLAUDE.md or AGENTS.md and file the rules
+it contains for the user to review.
+
+Deciding what counts as a rule is your job: which bullets are really one rule, what each
+one is about, whether it is an absolute constraint or a default preference, and which
+scope it belongs in. Take the document's own structure seriously and do not invent rules
+it does not state.
+
+Every rule must carry the exact text it came from in "quote", copied rather than
+paraphrased. The server checks each quote against the file and refuses any rule whose
+quote does not appear, so a rule you cannot quote is a rule you should not file.
+
+Nothing becomes active. Everything queues for the user to approve, edit, or reject.`
 
 // toolError converts a domain error into a tool execution error whose text
 // carries the stable code, so an agent can decide whether a retry is sensible.

@@ -67,6 +67,13 @@ type Config struct {
 	// empty list allows any root.
 	AllowedRoots []string `yaml:"allowed_roots,omitempty"`
 
+	// DocumentRoots are the directories that context_extract_rules may read
+	// instruction files from. It is empty by default, which disables the tool:
+	// naming a path and learning whether a quote appears in it is enough to
+	// read a file back a piece at a time, so the reachable set is chosen
+	// deliberately rather than defaulted.
+	DocumentRoots []string `yaml:"document_roots,omitempty"`
+
 	// RepositoryAliases maps alternate remote spellings onto one canonical
 	// repository. Use it for mirrors, never to merge a fork into its upstream.
 	RepositoryAliases map[string]string `yaml:"repository_aliases,omitempty"`

@@ -258,3 +258,79 @@ func proposeRecordSchema() *jsonschema.Schema {
 		},
 	}
 }
+
+func extractRulesSchema() *jsonschema.Schema {
+	scopeSchema := func(desc string) *jsonschema.Schema {
+		return &jsonschema.Schema{
+			Type:                 "object",
+			Description:          desc,
+			AdditionalProperties: noAdditionalProperties(),
+			Properties: map[string]*jsonschema.Schema{
+				"repository":      {Type: "string", MaxLength: ptr(2048)},
+				"branch_patterns": {Type: "array", MaxItems: ptr(32), Items: &jsonschema.Schema{Type: "string", MaxLength: ptr(512)}},
+				"path_patterns":   {Type: "array", MaxItems: ptr(64), Items: &jsonschema.Schema{Type: "string", MaxLength: ptr(2048)}},
+				"task_kinds":      {Type: "array", MaxItems: ptr(len(mecp.AllTaskKinds)), Items: &jsonschema.Schema{Type: "string", Enum: enumOf(mecp.AllTaskKinds)}},
+				"conditions":      conditionsSchema(),
+			},
+		}
+	}
+
+	return &jsonschema.Schema{
+		Type:                 "object",
+		AdditionalProperties: noAdditionalProperties(),
+		Required:             []string{"document_path", "rules"},
+		Properties: map[string]*jsonschema.Schema{
+			"document_path": {
+				Type:        "string",
+				Description: "The instruction file the rules were read from. It must be inside a configured document root.",
+				MinLength:   ptr(1),
+				MaxLength:   ptr(4096),
+			},
+			"scope": scopeSchema("Applies to every rule that does not carry its own. One document usually covers one area."),
+			"rules": {
+				Type:        "array",
+				Description: "The rules found in the document, in the order they appear.",
+				MinItems:    ptr(1),
+				MaxItems:    ptr(200),
+				Items: &jsonschema.Schema{
+					Type:                 "object",
+					AdditionalProperties: noAdditionalProperties(),
+					Required:             []string{"kind", "statement", "quote"},
+					Properties: map[string]*jsonschema.Schema{
+						"kind": {
+							Type:        "string",
+							Description: "constraint for an absolute rule, preference for a default, and the other kinds where they fit.",
+							Enum:        enumOf(mecp.AllRecordKinds),
+						},
+						"subject": {
+							Type:        "string",
+							Description: "What the rule is about, usually the heading it sits under.",
+							MaxLength:   ptr(256),
+						},
+						"statement": {
+							Type:        "string",
+							Description: "The rule as one self-contained sentence, understandable without the document.",
+							MinLength:   ptr(1),
+							MaxLength:   ptr(4000),
+						},
+						"rationale": {
+							Type:        "string",
+							Description: "Why the rule holds, when the document says so. Do not invent one.",
+							MaxLength:   ptr(4000),
+						},
+						"quote": {
+							Type: "string",
+							Description: "The exact text this rule came from, copied from the document. " +
+								"The server checks it against the file and refuses the rule if it does not appear, " +
+								"so it must be copied rather than paraphrased.",
+							MinLength: ptr(1),
+							MaxLength: ptr(4000),
+						},
+						"tags":  {Type: "array", MaxItems: ptr(16), Items: &jsonschema.Schema{Type: "string", MaxLength: ptr(64)}},
+						"scope": scopeSchema("Overrides the document-wide scope for this one rule."),
+					},
+				},
+			},
+		},
+	}
+}

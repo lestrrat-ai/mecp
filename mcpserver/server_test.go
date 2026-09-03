@@ -410,3 +410,37 @@ func TestAuditOriginIsTheGatewaysToSet(t *testing.T) {
 		require.Equal(t, mecp.OriginMCP, events[0].Origin)
 	})
 }
+
+func TestExtractRulesTool(t *testing.T) {
+	caller := agentCaller()
+	caller.Capabilities = append(caller.Capabilities, mecp.CapPropose)
+
+	t.Run("the tool appears with the propose capability", func(t *testing.T) {
+		session := connect(t, caller)
+		res, err := session.ListTools(t.Context(), nil)
+		require.NoError(t, err)
+
+		var found bool
+		for _, tool := range res.Tools {
+			if tool.Name == mcpserver.ToolExtractRules {
+				found = true
+			}
+		}
+		require.True(t, found)
+	})
+
+	t.Run("a rule with no quote is rejected by the schema", func(t *testing.T) {
+		session := connect(t, caller)
+		res, err := session.CallTool(t.Context(), &mcp.CallToolParams{
+			Name: mcpserver.ToolExtractRules,
+			Arguments: map[string]any{
+				"document_path": "/does/not/matter.md",
+				"rules": []map[string]any{
+					{"kind": "constraint", "statement": "Something."},
+				},
+			},
+		})
+		require.NoError(t, err)
+		require.True(t, res.IsError, "quote is required so a rule cannot be filed unchecked")
+	})
+}

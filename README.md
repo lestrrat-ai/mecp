@@ -57,6 +57,7 @@ global or per-repository agent file:
 | `context_search` | Follow-up question inside an already authorized scope. | yes |
 | `context_get_records` | Full records and quoted sources, for IDs already returned. | yes |
 | `context_propose_record` | Files a suggestion for you to review. Changes nothing. | no |
+| `context_extract_rules` | Reads an instruction document and queues its rules for review. | no |
 
 `context_prepare_task` does the work. An agent cannot guess which old terms to
 search for, so it sends the task and the workspace, and the server resolves the
@@ -121,8 +122,22 @@ $EDITOR go-rules.yaml
 mecp import go-rules.yaml
 ```
 
-It takes the structure the document already has. A bullet is a rule, a numbered
-step is a rule, a table row is a rule, and the nearest heading is the subject.
+That is the mechanical route, and it cannot tell an explanation from a rule. The
+other route is `context_extract_rules`, where an agent reads the document and
+decides, then files what it found. Judgement is the model's and the checking is
+mecp's: each rule must carry the exact text it came from, the server confirms
+that text is really in the file, and a rule it cannot find is refused. Both
+routes end in a review queue rather than in active records, and `mecp distill`
+doubles as the check on the model, because a large gap between the two counts
+says the model dropped something.
+
+The tool reads only inside `document_roots`, which is empty by default. Naming a
+path and learning whether a quote appears in it is enough to read a file back a
+piece at a time, so the reachable set is chosen rather than defaulted.
+
+Distill takes the structure the document already has. A bullet is a rule, a
+numbered step is a rule, a table row is a rule, and the nearest heading is the
+subject.
 Prose paragraphs are counted and skipped rather than guessed at, and the line
 numbers are reported so you can see what was left behind. Scope is not inferred,
 because a wrong scope is worse than none; set it for the whole file with the
