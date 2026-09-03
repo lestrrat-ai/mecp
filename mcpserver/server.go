@@ -89,7 +89,10 @@ func New(svc mecp.Service, caller mecp.Caller, options ...Option) (*Server, erro
 		return nil, fmt.Errorf(`client profile is not usable: %w`, err)
 	}
 
-	s := &Server{svc: svc, caller: caller, limits: DefaultLimits()}
+	// The gateway is the MCP boundary, so it stamps the origin itself rather
+	// than trusting what it was handed. Everything served here reached the
+	// service over MCP, whatever the configuration that built the caller said.
+	s := &Server{svc: svc, caller: caller.WithOrigin(mecp.OriginMCP), limits: DefaultLimits()}
 	for _, opt := range options {
 		opt(s)
 	}

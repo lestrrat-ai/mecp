@@ -187,8 +187,15 @@ Quoted source text is never trusted. A record's `statement` is MeCP's own
 wording; `exact_excerpt` is what the source said, kept in a separate field, and
 nothing in it can raise a record's authority.
 
-Every call writes an audit line: who asked, what scope, which records came back,
-which warnings fired. It does not copy the task text or the record statements.
+Every call writes an audit line: who asked, over which interface, what scope,
+which records came back, which warnings fired. It does not copy the task text or
+the record statements.
+
+The interface is recorded because the client profile alone cannot tell an
+agent's call apart from `mecp prepare --client claude-code`, which reproduces
+what that agent would be told. The gateway stamps `mcp` and the command line
+stamps `cli`, so a diagnostic run never reads as the agent's own call. Lines
+written before this existed show `unknown`.
 
 ## Layout
 

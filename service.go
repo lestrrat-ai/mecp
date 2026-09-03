@@ -660,9 +660,16 @@ func (s *service) takeHandle(caller Caller, id string) (*contextHandle, error) {
 	return h, nil
 }
 
-func (s *service) writeAudit(ctx context.Context, ev AuditEvent, start time.Time) {
+// writeAudit stamps the parts of an event that every call site would otherwise
+// have to repeat, and records it. The caller identity is copied here rather
+// than at each site so that a new operation cannot ship an event that is
+// missing who asked or which interface they asked through.
+func (s *service) writeAudit(ctx context.Context, caller Caller, ev AuditEvent, start time.Time) {
 	ev.At = s.clock.Now()
 	ev.LatencyMS = time.Since(start).Milliseconds()
+	ev.PrincipalID = caller.PrincipalID
+	ev.ClientID = caller.ClientID
+	ev.Origin = caller.Origin
 	// An audit failure must not fail the user's call; it is recorded locally
 	// and best-effort by design.
 	_ = s.audit.Write(ctx, ev)

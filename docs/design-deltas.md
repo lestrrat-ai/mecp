@@ -55,6 +55,23 @@ installation is readable without opening the log file by hand. Because the
 fallback above can leave events in both places, a run against the SQLite sink
 says on stderr when the JSONL log is non-empty as well.
 
+## Audit events also record the interface the call came through
+
+The design's audit event lists the client profile and the principal, which
+between them do not say whether a call arrived over MCP or from the CLI. The CLI
+runs the same code path on purpose, so `mecp prepare --client claude-code`
+writes a line identical to the one that agent's own call writes, and the trail
+cannot answer what actually happened.
+
+Every event therefore carries an `origin`, stamped by the boundary the call came
+through: `mcpserver.New` sets `mcp` over whatever it was handed, and the CLI
+sets `cli` where it resolves an identity. The service copies it from the caller
+in one place, so a new operation cannot ship an event without one.
+
+The field is absent from events written before it existed. Those decode to an
+empty origin and display as `unknown`, which is neither interface: an old line
+is never read as an agent call, and no migration is needed for either sink.
+
 ## Context handles are in-process
 
 The design describes a context-pack cache keyed by principal, client, revision,

@@ -59,11 +59,9 @@ func (s *service) Search(ctx context.Context, req SearchRequest) (*SearchResult,
 
 	scope, warnings, err := s.resolveScope(req.Caller, workspace, taskKind)
 	if err != nil {
-		s.writeAudit(ctx, AuditEvent{
-			PrincipalID: req.Caller.PrincipalID,
-			ClientID:    req.Caller.ClientID,
-			Operation:   "search",
-			ErrorCode:   CodeOf(err),
+		s.writeAudit(ctx, req.Caller, AuditEvent{
+			Operation: "search",
+			ErrorCode: CodeOf(err),
 		}, start)
 		return nil, err
 	}
@@ -117,9 +115,7 @@ func (s *service) Search(ctx context.Context, req SearchRequest) (*SearchResult,
 		Warnings:  warnings,
 	}
 
-	s.writeAudit(ctx, AuditEvent{
-		PrincipalID:  req.Caller.PrincipalID,
-		ClientID:     req.Caller.ClientID,
+	s.writeAudit(ctx, req.Caller, AuditEvent{
 		Operation:    "search",
 		Scope:        scope,
 		RecordIDs:    searchRecordIDs(items),

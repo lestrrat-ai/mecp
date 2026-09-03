@@ -32,6 +32,40 @@ var AllCapabilities = []Capability{
 
 func (c Capability) Valid() bool { return slices.Contains(AllCapabilities, c) }
 
+// Origin is the interface a call arrived through. Like the rest of the caller
+// identity it is stamped by the process that built the caller, never taken from
+// a tool argument.
+//
+// It exists because the client profile alone cannot tell an agent's call apart
+// from a diagnostic CLI run made with the same profile, such as "mecp prepare
+// --client claude-code". Both would otherwise write audit lines that read
+// identically, which makes the trail useless for working out what actually
+// happened.
+type Origin string
+
+const (
+	// OriginMCP marks a call an agent host made through the MCP gateway.
+	OriginMCP Origin = "mcp"
+	// OriginCLI marks a call the mecp command line made, including a
+	// diagnostic run that reproduces what an agent would be told.
+	OriginCLI Origin = "cli"
+)
+
+// AllOrigins lists every origin in a stable order.
+var AllOrigins = []Origin{OriginMCP, OriginCLI}
+
+func (o Origin) Valid() bool { return slices.Contains(AllOrigins, o) }
+
+// String names the origin for display. An audit event written before origins
+// were recorded carries none, and it reads back as "unknown" rather than being
+// attributed to either interface.
+func (o Origin) String() string {
+	if o == "" {
+		return "unknown"
+	}
+	return string(o)
+}
+
 // Caller is the trusted identity of whoever is asking. The MCP adapter derives
 // it from server configuration; it is never accepted as a tool argument,
 // because a tool argument is model-controlled input.
@@ -44,9 +78,18 @@ func (c Capability) Valid() bool { return slices.Contains(AllCapabilities, c) }
 type Caller struct {
 	PrincipalID         string
 	ClientID            string
+	Origin              Origin
 	Capabilities        []Capability
 	AllowedRepositories []string
 	AllowedRoots        []string
+}
+
+// WithOrigin returns a copy of the caller marked as having arrived through
+// origin. Each transport stamps its own on the way in: the gateway does it in
+// mcpserver.New, and the command line does it where it resolves an identity.
+func (c Caller) WithOrigin(origin Origin) Caller {
+	c.Origin = origin
+	return c
 }
 
 // Has reports whether the caller holds a capability. An admin caller holds
@@ -83,6 +126,12 @@ func (c Caller) Validate() error {
 	}
 	if c.ClientID == "" {
 		return errorf(CodeUnauthorizedScope, "caller has no client profile")
+	}
+	// An unset origin is allowed: it means the caller was built by an embedder
+	// that predates origins, and it audits as "unknown". A misspelled one is
+	// not, because it would audit as an interface that does not exist.
+	if c.Origin != "" && !c.Origin.Valid() {
+		return errorf(CodeUnauthorizedScope, "caller declares unknown origin %q", string(c.Origin))
 	}
 	if len(c.Capabilities) == 0 {
 		return errorf(CodeUnauthorizedScope, "client profile %q grants no capabilities", c.ClientID)

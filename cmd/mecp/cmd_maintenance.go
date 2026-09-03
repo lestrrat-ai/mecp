@@ -208,9 +208,14 @@ func runAudit(ctx context.Context, cmd *cli.Command) error {
 		fmt.Printf("No matching audit events in %s.\n", auditLocation(cfg))
 		return nil
 	}
+	// The origin sits next to the client profile because the two together say
+	// who asked: the same profile appears on an agent's call over MCP and on a
+	// "mecp prepare --client ..." run that reproduces it. An event written
+	// before origins were recorded prints as "unknown".
 	for _, ev := range events {
-		fmt.Printf("%s  %-16s %-16s %d record(s) %dms %s\n",
-			ev.At.Format(time.RFC3339), ev.Operation, ev.ClientID, ev.ResultCount, ev.LatencyMS, ev.ErrorCode)
+		fmt.Printf("%s  %-16s %-16s %-8s %d record(s) %dms %s\n",
+			ev.At.Format(time.RFC3339), ev.Operation, ev.ClientID, ev.Origin,
+			ev.ResultCount, ev.LatencyMS, ev.ErrorCode)
 	}
 	return nil
 }

@@ -54,4 +54,30 @@ func TestAuditEvents(t *testing.T) {
 		require.NoError(t, err)
 		require.Empty(t, events)
 	})
+
+	t.Run("the origin survives the round trip", func(t *testing.T) {
+		store := newStore(t)
+		sink := sqlite.NewAuditSink(store)
+		require.NoError(t, sink.Write(t.Context(), mecp.AuditEvent{
+			At: base, PrincipalID: "local-user", ClientID: "claude-code",
+			Origin: mecp.OriginCLI, Operation: "prepare_task",
+		}))
+
+		events, err := store.AuditEvents(t.Context(), mecp.AuditQuery{})
+		require.NoError(t, err)
+		require.Len(t, events, 1)
+		require.Equal(t, mecp.OriginCLI, events[0].Origin)
+	})
+
+	t.Run("a row written before origins were recorded still reads back", func(t *testing.T) {
+		// An event with no origin stores no origin key, which is exactly the
+		// shape of a row written before the field existed.
+		store := newAuditStore(t, 1)
+
+		events, err := store.AuditEvents(t.Context(), mecp.AuditQuery{})
+		require.NoError(t, err)
+		require.Len(t, events, 1)
+		require.Empty(t, events[0].Origin)
+		require.Equal(t, "unknown", events[0].Origin.String())
+	})
 }

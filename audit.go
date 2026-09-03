@@ -22,10 +22,16 @@ const maxAuditLineBytes = 1 << 20
 // AuditEvent is the local record of one service call. It deliberately omits
 // task text and record statements: an audit trail that copies the data it is
 // auditing doubles the disclosure surface.
+//
+// Origin says which interface the call came through, because the client profile
+// alone cannot tell an agent's call apart from a CLI run made under the same
+// profile. It is absent from events written before origins were recorded, and
+// those read back as Origin "" rather than as either interface.
 type AuditEvent struct {
 	At           time.Time      `json:"at"`
 	PrincipalID  string         `json:"principal_id"`
 	ClientID     string         `json:"client_id"`
+	Origin       Origin         `json:"origin,omitempty"`
 	Operation    string         `json:"operation"`
 	Scope        EffectiveScope `json:"scope"`
 	RecordIDs    []string       `json:"record_ids,omitempty"`

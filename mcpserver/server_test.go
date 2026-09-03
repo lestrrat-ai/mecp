@@ -1,8 +1,10 @@
 package mcpserver_test
 
 import (
+	"context"
 	"encoding/json"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -29,6 +31,13 @@ func agentCaller() mecp.Caller {
 // the real JSON-RPC encoding, schema validation, and structured-output path.
 func connect(t *testing.T, caller mecp.Caller, records ...*mecp.Record) *mcp.ClientSession {
 	t.Helper()
+	return connectAudited(t, caller, mecp.NopAudit{}, records...)
+}
+
+// connectAudited is connect with the audit trail kept, for the tests that care
+// what the call recorded.
+func connectAudited(t *testing.T, caller mecp.Caller, sink mecp.AuditSink, records ...*mecp.Record) *mcp.ClientSession {
+	t.Helper()
 
 	store, err := sqlite.Open(filepath.Join(t.TempDir(), "context.db"))
 	require.NoError(t, err)
@@ -41,7 +50,7 @@ func connect(t *testing.T, caller mecp.Caller, records ...*mecp.Record) *mcp.Cli
 		require.NoError(t, store.PutRecord(t.Context(), rec))
 	}
 
-	svc, err := mecp.New(store, mecp.WithClock(mecp.FixedClock{Time: testNow}))
+	svc, err := mecp.New(store, mecp.WithClock(mecp.FixedClock{Time: testNow}), mecp.WithAuditSink(sink))
 	require.NoError(t, err)
 
 	srv, err := mcpserver.New(svc, caller)
@@ -347,4 +356,57 @@ func contentText(res *mcp.CallToolResult) string {
 		}
 	}
 	return out
+}
+
+// recordingAudit keeps every event the service wrote during a tool call.
+type recordingAudit struct {
+	mu     sync.Mutex
+	events []mecp.AuditEvent
+}
+
+func (a *recordingAudit) Write(_ context.Context, ev mecp.AuditEvent) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.events = append(a.events, ev)
+	return nil
+}
+
+func (a *recordingAudit) all() []mecp.AuditEvent {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]mecp.AuditEvent(nil), a.events...)
+}
+
+func TestAuditOriginIsTheGatewaysToSet(t *testing.T) {
+	t.Run("a tool call audits as MCP even when the caller arrived without an origin", func(t *testing.T) {
+		sink := &recordingAudit{}
+		session := connectAudited(t, agentCaller(), sink, stylesheetConstraint())
+
+		res, err := session.CallTool(t.Context(), &mcp.CallToolParams{
+			Name:      mcpserver.ToolPrepareTask,
+			Arguments: map[string]any{"task": "Review the XSLT handling"},
+		})
+		require.NoError(t, err)
+		require.False(t, res.IsError, contentText(res))
+
+		events := sink.all()
+		require.Len(t, events, 1)
+		require.Equal(t, mecp.OriginMCP, events[0].Origin)
+	})
+
+	t.Run("a caller handed in as CLI is still audited as MCP", func(t *testing.T) {
+		sink := &recordingAudit{}
+		session := connectAudited(t, agentCaller().WithOrigin(mecp.OriginCLI), sink, stylesheetConstraint())
+
+		res, err := session.CallTool(t.Context(), &mcp.CallToolParams{
+			Name:      mcpserver.ToolPrepareTask,
+			Arguments: map[string]any{"task": "Review the XSLT handling"},
+		})
+		require.NoError(t, err)
+		require.False(t, res.IsError, contentText(res))
+
+		events := sink.all()
+		require.Len(t, events, 1)
+		require.Equal(t, mecp.OriginMCP, events[0].Origin)
+	})
 }

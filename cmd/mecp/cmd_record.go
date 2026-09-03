@@ -240,7 +240,7 @@ func runRecordShow(ctx context.Context, cmd *cli.Command) error {
 	defer rt.Close()
 
 	res, err := rt.svc.GetRecords(ctx, mecp.GetRecordsRequest{
-		Caller:          rt.cfg.AdminCaller(),
+		Caller:          rt.cfg.AdminCaller().WithOrigin(mecp.OriginCLI),
 		RecordIDs:       ids,
 		IncludeEvidence: true,
 	})

@@ -93,9 +93,7 @@ func (s *service) ProposeRecord(ctx context.Context, req ProposeRecordRequest) (
 		return nil, wrapf(CodeStorage, err, "cannot store proposal")
 	}
 
-	s.writeAudit(ctx, AuditEvent{
-		PrincipalID: req.Caller.PrincipalID,
-		ClientID:    req.Caller.ClientID,
+	s.writeAudit(ctx, req.Caller, AuditEvent{
 		Operation:   "propose_record",
 		Scope:       EffectiveScope{Principal: req.Caller.PrincipalID, Repository: scope.Repository},
 		ProposalID:  stored.ID,

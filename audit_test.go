@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/lestrrat-ai/mecp"
+	"github.com/lestrrat-ai/mecp/sqlite"
 	"github.com/stretchr/testify/require"
 )
 
@@ -111,6 +113,35 @@ func TestJSONLAuditReader(t *testing.T) {
 		require.Contains(t, err.Error(), "line 3")
 	})
 
+	t.Run("an origin survives the round trip", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "audit.jsonl")
+		sink, err := mecp.NewJSONLAudit(path)
+		require.NoError(t, err)
+		require.NoError(t, sink.Write(t.Context(), mecp.AuditEvent{
+			At: base, PrincipalID: "local-user", ClientID: "claude-code",
+			Origin: mecp.OriginMCP, Operation: "prepare_task",
+		}))
+
+		events, err := mecp.NewJSONLAuditReader(path).AuditEvents(t.Context(), mecp.AuditQuery{})
+		require.NoError(t, err)
+		require.Len(t, events, 1)
+		require.Equal(t, mecp.OriginMCP, events[0].Origin)
+	})
+
+	t.Run("a line written before origins were recorded still reads back", func(t *testing.T) {
+		path := writeAuditLog(t, base, 1)
+		require.NoError(t, appendLine(path,
+			`{"at":"2026-09-03T09:00:00Z","principal_id":"local-user","client_id":"claude-code",`+
+				`"operation":"prepare_task","result_count":1}`+"\n"))
+
+		events, err := mecp.NewJSONLAuditReader(path).AuditEvents(t.Context(), mecp.AuditQuery{})
+		require.NoError(t, err)
+		require.Len(t, events, 2)
+		require.Equal(t, "prepare_task", events[0].Operation)
+		require.Empty(t, events[0].Origin)
+		require.Equal(t, "unknown", events[0].Origin.String())
+	})
+
 	t.Run("a cancelled context stops the read", func(t *testing.T) {
 		reader := mecp.NewJSONLAuditReader(writeAuditLog(t, base, 3))
 		ctx, cancel := context.WithCancel(t.Context())
@@ -129,4 +160,116 @@ func appendLine(path, line string) error {
 	defer f.Close()
 	_, err = f.WriteString(line)
 	return err
+}
+
+// recordingAudit keeps every event a service wrote, so a test can assert what
+// the trail says about a call.
+type recordingAudit struct {
+	mu     sync.Mutex
+	events []mecp.AuditEvent
+}
+
+func (a *recordingAudit) Write(_ context.Context, ev mecp.AuditEvent) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.events = append(a.events, ev)
+	return nil
+}
+
+func (a *recordingAudit) all() []mecp.AuditEvent {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]mecp.AuditEvent(nil), a.events...)
+}
+
+// auditedService builds a service whose audit trail the test reads back.
+func auditedService(t *testing.T, records ...*mecp.Record) (mecp.Service, *recordingAudit) {
+	t.Helper()
+
+	store, err := sqlite.Open(filepath.Join(t.TempDir(), "context.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { store.Close() })
+	require.NoError(t, store.Migrate(t.Context()))
+
+	for _, rec := range records {
+		rec.Normalize(testNow.Add(-24 * time.Hour))
+		require.NoError(t, rec.Validate())
+		require.NoError(t, store.PutRecord(t.Context(), rec))
+	}
+
+	sink := &recordingAudit{}
+	svc, err := mecp.New(store,
+		mecp.WithClock(mecp.FixedClock{Time: testNow}), mecp.WithAuditSink(sink))
+	require.NoError(t, err)
+	return svc, sink
+}
+
+func TestAuditOrigin(t *testing.T) {
+	prepare := func(t *testing.T, svc mecp.Service, caller mecp.Caller) error {
+		t.Helper()
+		_, err := svc.PrepareTask(t.Context(), mecp.PrepareTaskRequest{
+			Caller:    caller,
+			Task:      "Review the parser",
+			TaskKind:  mecp.TaskCodeReview,
+			Workspace: heliumWorkspace(),
+		})
+		return err
+	}
+
+	t.Run("a diagnostic CLI run is distinguishable from the agent's own call", func(t *testing.T) {
+		svc, sink := auditedService(t, stylesheetConstraint())
+
+		require.NoError(t, prepare(t, svc, agentCaller().WithOrigin(mecp.OriginMCP)))
+		require.NoError(t, prepare(t, svc, agentCaller().WithOrigin(mecp.OriginCLI)))
+
+		events := sink.all()
+		require.Len(t, events, 2)
+		// The client profile is identical, which is the whole problem the
+		// origin solves.
+		require.Equal(t, "claude-code", events[0].ClientID)
+		require.Equal(t, "claude-code", events[1].ClientID)
+		require.Equal(t, mecp.OriginMCP, events[0].Origin)
+		require.Equal(t, mecp.OriginCLI, events[1].Origin)
+	})
+
+	t.Run("a search records the origin", func(t *testing.T) {
+		svc, sink := auditedService(t, stylesheetConstraint())
+
+		_, err := svc.Search(t.Context(), mecp.SearchRequest{
+			Caller:    agentCaller().WithOrigin(mecp.OriginCLI),
+			Query:     "stylesheets",
+			Workspace: heliumWorkspace(),
+		})
+		require.NoError(t, err)
+
+		events := sink.all()
+		require.Len(t, events, 1)
+		require.Equal(t, mecp.OriginCLI, events[0].Origin)
+	})
+
+	t.Run("a refused call records the origin too", func(t *testing.T) {
+		svc, sink := auditedService(t, stylesheetConstraint())
+
+		caller := agentCaller().WithOrigin(mecp.OriginMCP)
+		caller.AllowedRepositories = []string{"https://github.com/example/billing"}
+		err := prepare(t, svc, caller)
+		require.Error(t, err)
+		require.Equal(t, mecp.CodeUnauthorizedScope, mecp.CodeOf(err))
+
+		events := sink.all()
+		require.Len(t, events, 1)
+		require.Equal(t, mecp.OriginMCP, events[0].Origin)
+		require.Equal(t, mecp.CodeUnauthorizedScope, events[0].ErrorCode)
+	})
+
+	t.Run("a caller built without an origin audits as unknown", func(t *testing.T) {
+		svc, sink := auditedService(t, stylesheetConstraint())
+
+		require.NoError(t, prepare(t, svc, agentCaller()))
+
+		events := sink.all()
+		require.Len(t, events, 1)
+		require.Empty(t, events[0].Origin)
+		require.Equal(t, "unknown", events[0].Origin.String())
+	})
 }

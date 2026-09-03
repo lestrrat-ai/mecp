@@ -138,9 +138,7 @@ func (s *service) GetRecords(ctx context.Context, req GetRecordsRequest) (*Recor
 		})
 	}
 
-	s.writeAudit(ctx, AuditEvent{
-		PrincipalID:  req.Caller.PrincipalID,
-		ClientID:     req.Caller.ClientID,
+	s.writeAudit(ctx, req.Caller, AuditEvent{
 		Operation:    "get_records",
 		Scope:        EffectiveScope{Principal: req.Caller.PrincipalID},
 		RecordIDs:    ids,
