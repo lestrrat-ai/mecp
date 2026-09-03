@@ -281,3 +281,24 @@ for records mecp is the only home for. It does not hold for a rule extracted
 from a document under version control: what the document used to say is already
 in its own history, and a second copy here only fills every listing with rules
 that no longer exist.
+
+## Universal rules are delivered once, not every turn
+
+A hook that injects a context pack on every prompt leaves a copy of that pack in
+the conversation on every prompt. With 22 of 24 records applying everywhere, a
+long session accumulated tens of thousands of tokens of the same unchanging
+rules. Loading a document once is cheaper than that, which inverts the point of
+the exercise.
+
+The scope model already draws the line. A record that applies everywhere is
+session-level and goes once, through a `SessionStart` hook. A record tied to a
+repository, a path, or a kind of work varies with the turn and is the only kind
+worth sending per prompt. `PrepareTaskRequest.ScopeFilter` expresses that, and
+`mecp hook --event session-start` uses it.
+
+Breadth is read from the record's scope rather than from its match score.
+Every record names a principal, which counts towards specificity, so a match
+score is never zero and cannot stand in for "applies everywhere".
+
+On the store as it stands this turns 23 records per turn into 22 once and 2 per
+turn.

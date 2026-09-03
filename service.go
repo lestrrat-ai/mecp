@@ -30,6 +30,24 @@ type Service interface {
 	ExtractRules(ctx context.Context, req ExtractRulesRequest) (*ExtractRulesResult, error)
 }
 
+// ScopeFilter narrows a context pack by how widely its records apply.
+//
+// It exists because a caller that injects context on every turn would otherwise
+// resend the same universal rules forever, and each copy stays in the
+// conversation. Delivering those once and then only what is specific to the
+// work keeps the repetition out.
+type ScopeFilter string
+
+const (
+	// ScopeFilterAll returns every applicable record.
+	ScopeFilterAll ScopeFilter = ""
+	// ScopeFilterGlobalOnly returns only records that apply everywhere, which
+	// is what a caller wants once at the start of a session.
+	ScopeFilterGlobalOnly ScopeFilter = "global_only"
+	// ScopeFilterScopedOnly omits those, for a caller that already has them.
+	ScopeFilterScopedOnly ScopeFilter = "scoped_only"
+)
+
 // PrepareTaskRequest asks for the context that matters for one task.
 type PrepareTaskRequest struct {
 	Caller                   Caller
@@ -39,6 +57,8 @@ type PrepareTaskRequest struct {
 	Conditions               map[string]string
 	TokenBudget              int
 	IncludeEvidenceSummaries bool
+	// ScopeFilter narrows the pack to records of a given breadth.
+	ScopeFilter ScopeFilter
 }
 
 // ContextPack is the bounded result of preparing context for a task.
@@ -372,6 +392,7 @@ type collectRequest struct {
 	Conditions   map[string]string
 	Kinds        []RecordKind
 	IncludeStale bool
+	ScopeFilter  ScopeFilter
 	// IncludeMandatory pulls in directly-scoped directive records even when
 	// they do not match the query text. Task preparation needs this; a targeted
 	// follow-up search does not.
@@ -437,6 +458,20 @@ func (s *service) collect(ctx context.Context, req collectRequest) ([]*Candidate
 		match := c.Record.Scope.Match(scopeReq)
 		if !match.Matched {
 			continue
+		}
+		// Breadth is a property of the record's scope, not of the match. Every
+		// record names a principal, which scores on the user dimension, so
+		// specificity is never zero and cannot stand in for "applies
+		// everywhere".
+		switch req.ScopeFilter {
+		case ScopeFilterGlobalOnly:
+			if !c.Record.Scope.Global() {
+				continue
+			}
+		case ScopeFilterScopedOnly:
+			if c.Record.Scope.Global() {
+				continue
+			}
 		}
 		c.Scope = match
 		applicable = append(applicable, c)

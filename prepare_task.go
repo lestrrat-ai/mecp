@@ -51,6 +51,7 @@ func (s *service) PrepareTask(ctx context.Context, req PrepareTaskRequest) (*Con
 		Repository:       scope.Repository,
 		TaskKind:         taskKind,
 		Conditions:       req.Conditions,
+		ScopeFilter:      req.ScopeFilter,
 		IncludeMandatory: true,
 	})
 	if err != nil {

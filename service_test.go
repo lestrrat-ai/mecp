@@ -750,3 +750,47 @@ func TestServiceIsSafeForConcurrentUse(t *testing.T) {
 		require.NoError(t, err)
 	}
 }
+
+func TestScopeFilter(t *testing.T) {
+	global := &mecp.Record{
+		ID: "rec_global", Kind: mecp.KindConstraint, Subject: "temporary files",
+		Statement: "Never write temporary files to /tmp.",
+		Scope:     mecp.Scope{User: "local-user"},
+		Authority: mecp.AuthorityUser,
+	}
+	scoped := &mecp.Record{
+		ID: "rec_scoped", Kind: mecp.KindConstraint, Subject: "cmd layout",
+		Statement: "Command wiring lives in cmd/mecp.",
+		Scope:     mecp.Scope{User: "local-user", Repository: heliumRepo},
+		Authority: mecp.AuthorityUser,
+	}
+	svc, _ := newService(t, global, scoped)
+
+	ask := func(f mecp.ScopeFilter) []string {
+		pack, err := svc.PrepareTask(t.Context(), mecp.PrepareTaskRequest{
+			Caller: agentCaller(), Task: "Do some work", Workspace: heliumWorkspace(),
+			ScopeFilter: f,
+		})
+		require.NoError(t, err)
+		return itemIDs(pack.Items)
+	}
+
+	t.Run("no filter returns both", func(t *testing.T) {
+		require.ElementsMatch(t, []string{"rec_global", "rec_scoped"}, ask(mecp.ScopeFilterAll))
+	})
+
+	t.Run("global only drops the repository-scoped record", func(t *testing.T) {
+		require.Equal(t, []string{"rec_global"}, ask(mecp.ScopeFilterGlobalOnly))
+	})
+
+	t.Run("scoped only drops the universal record", func(t *testing.T) {
+		require.Equal(t, []string{"rec_scoped"}, ask(mecp.ScopeFilterScopedOnly))
+	})
+
+	t.Run("naming a principal does not make a record scoped", func(t *testing.T) {
+		// Every extracted record carries its principal, so treating that as
+		// narrowing would put all of them on the per-turn path and defeat the
+		// split entirely.
+		require.Contains(t, ask(mecp.ScopeFilterGlobalOnly), "rec_global")
+	})
+}

@@ -43,13 +43,24 @@ It never blocks a turn. Any failure, including a missing database or a timeout,
 exits quietly with no output, because a broken hook must not stop the user
 working.
 
-Install it as a UserPromptSubmit hook:
+Install it as two hooks, because rules differ in how often they need repeating.
 
-  {"hooks": {"UserPromptSubmit": [{"hooks": [
-    {"type": "command", "command": "mecp hook --client claude-code"}
-  ]}]}}`,
+Rules that apply everywhere are the same on every turn, and a hook that resends
+them each time leaves a copy in the conversation each time. Those go once, at
+session start. Only rules tied to this repository, these paths, or this kind of
+work vary with the turn, and only those are worth sending per prompt.
+
+  {"hooks": {
+    "SessionStart":     [{"hooks": [{"type": "command", "command": "mecp hook --event session-start --client claude-code"}]}],
+    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "mecp hook --client claude-code"}]}]
+  }}`,
 		Flags: append(globalFlags(),
 			&cli.StringFlag{Name: "client", Usage: "client profile to apply", Value: "default"},
+			&cli.StringFlag{
+				Name:  "event",
+				Usage: `which hook this is: "prompt" for UserPromptSubmit, or "session-start" for SessionStart`,
+				Value: "prompt",
+			},
 			&cli.IntFlag{
 				Name:  "budget",
 				Usage: "approximate token budget for the injected block; defaults to defaults.token_budget in the configuration",
@@ -69,6 +80,28 @@ type hookPayload struct {
 	SessionID string `json:"session_id"`
 }
 
+// hookEvent says which hook is running, and therefore which records are worth
+// sending.
+type hookEvent struct {
+	filter mecp.ScopeFilter
+	// task stands in for the prompt at session start, where there is none yet.
+	task string
+}
+
+func eventFor(name string) (hookEvent, error) {
+	switch name {
+	case "prompt", "":
+		return hookEvent{filter: mecp.ScopeFilterScopedOnly}, nil
+	case "session-start":
+		return hookEvent{
+			filter: mecp.ScopeFilterGlobalOnly,
+			task:   "starting work in this repository",
+		}, nil
+	default:
+		return hookEvent{}, fmt.Errorf(`unknown hook event %q; use "prompt" or "session-start"`, name)
+	}
+}
+
 func runHook(ctx context.Context, cmd *cli.Command) error {
 	verbose := cmd.Bool("verbose")
 
@@ -84,11 +117,19 @@ func injectContext(ctx context.Context, cmd *cli.Command) error {
 	ctx, cancel := context.WithTimeout(ctx, cmd.Duration("timeout"))
 	defer cancel()
 
+	event, err := eventFor(cmd.String("event"))
+	if err != nil {
+		return err
+	}
+
 	payload, err := readHookPayload(os.Stdin)
 	if err != nil {
 		return err
 	}
 	task := strings.TrimSpace(payload.Prompt)
+	if task == "" {
+		task = event.task
+	}
 	if task == "" {
 		return nil
 	}
@@ -128,12 +169,14 @@ func injectContext(ctx context.Context, cmd *cli.Command) error {
 		// absent one does not.
 		Workspace:   hookWorkspace(payload.CWD, task),
 		TokenBudget: budget,
+		ScopeFilter: event.filter,
 	})
 	if err != nil {
 		return err
 	}
 
 	out := renderHookBlock(pack)
+
 	if out == "" {
 		return nil
 	}
