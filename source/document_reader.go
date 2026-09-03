@@ -15,20 +15,21 @@ import (
 // something this should do.
 const maxDocumentBytes = 4 << 20
 
-// DocumentStore reads instruction documents from the filesystem, and only from
-// inside the roots it was given.
+// DocumentReader reads instruction documents from the filesystem, and only from
+// inside the roots it was given. It stores nothing; the name says read because
+// reading is all it does.
 //
 // The restriction is the point. ExtractRules reports whether a quote appears in
 // a named file, and that answer is enough to read a file back a piece at a time
 // by guessing. Confining reads to roots the user chose keeps that from being a
 // way to search the whole disk. A store with no roots reads nothing.
-type DocumentStore struct {
+type DocumentReader struct {
 	roots []string
 }
 
-// NewDocumentStore returns a store confined to roots. Each root is resolved
+// NewDocumentReader returns a reader confined to roots. Each root is resolved
 // once, so a symlink swapped in later cannot widen what is readable.
-func NewDocumentStore(roots []string) *DocumentStore {
+func NewDocumentReader(roots []string) *DocumentReader {
 	resolved := make([]string, 0, len(roots))
 	for _, root := range roots {
 		root = expandHome(strings.TrimSpace(root))
@@ -44,19 +45,19 @@ func NewDocumentStore(roots []string) *DocumentStore {
 		}
 		resolved = append(resolved, abs)
 	}
-	return &DocumentStore{roots: resolved}
+	return &DocumentReader{roots: resolved}
 }
 
-// Roots reports which directories the store may read from.
-func (s *DocumentStore) Roots() []string { return append([]string(nil), s.roots...) }
+// Roots reports which directories the reader may read from.
+func (r *DocumentReader) Roots() []string { return append([]string(nil), r.roots...) }
 
 // Read returns a document, refusing any path outside the configured roots.
-func (s *DocumentStore) Read(_ context.Context, path string) (*mecp.Document, error) {
-	if len(s.roots) == 0 {
+func (r *DocumentReader) Read(_ context.Context, path string) (*mecp.Document, error) {
+	if len(r.roots) == 0 {
 		return nil, fmt.Errorf(`no document roots are configured, so no instruction file may be read`)
 	}
 
-	abs, err := s.resolve(path)
+	abs, err := r.resolve(path)
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +89,7 @@ func (s *DocumentStore) Read(_ context.Context, path string) (*mecp.Document, er
 // resolve turns a caller-supplied path into an absolute one inside a root, or
 // refuses it. Symlinks are followed before the check, so a link inside a root
 // pointing out of it is caught rather than followed.
-func (s *DocumentStore) resolve(path string) (string, error) {
+func (r *DocumentReader) resolve(path string) (string, error) {
 	path = expandHome(strings.TrimPrefix(strings.TrimSpace(path), "file://"))
 	if path == "" {
 		return "", fmt.Errorf(`no document path was given`)
@@ -102,13 +103,13 @@ func (s *DocumentStore) resolve(path string) (string, error) {
 		abs = real
 	}
 
-	for _, root := range s.roots {
+	for _, root := range r.roots {
 		if abs == root || strings.HasPrefix(abs, root+string(filepath.Separator)) {
 			return abs, nil
 		}
 	}
 	return "", fmt.Errorf(`%s is outside every configured document root (%s)`,
-		path, strings.Join(s.roots, ", "))
+		path, strings.Join(r.roots, ", "))
 }
 
 func expandHome(path string) string {
@@ -125,4 +126,4 @@ func expandHome(path string) string {
 	return filepath.Join(home, path[2:])
 }
 
-var _ mecp.DocumentStore = (*DocumentStore)(nil)
+var _ mecp.DocumentReader = (*DocumentReader)(nil)

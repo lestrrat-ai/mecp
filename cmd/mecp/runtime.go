@@ -69,7 +69,7 @@ func openRuntime(ctx context.Context, cmd *cli.Command, readOnly bool) (*runtime
 		options = append(options, mecp.WithSourceResolver(source.NewGitResolver()))
 	}
 	if len(cfg.DocumentRoots) > 0 {
-		options = append(options, mecp.WithDocumentStore(source.NewDocumentStore(cfg.DocumentRoots)))
+		options = append(options, mecp.WithDocumentReader(source.NewDocumentReader(cfg.DocumentRoots)))
 	}
 
 	sink, err := auditSink(cfg, store, readOnly)

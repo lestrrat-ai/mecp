@@ -188,7 +188,7 @@ type service struct {
 	packer        Packer
 	validator     Validator
 	audit         AuditSink
-	documents     DocumentStore
+	documents     DocumentReader
 	contextTTL    time.Duration
 	maxCandidates int
 	aliases       map[string]string
@@ -249,8 +249,8 @@ func New(store Store, options ...ServiceOption) (Service, error) {
 			validationTTL = option.MustGet[time.Duration](opt)
 		case identAuditSink:
 			svc.audit = option.MustGet[AuditSink](opt)
-		case identDocumentStore:
-			svc.documents = option.MustGet[DocumentStore](opt)
+		case identDocumentReader:
+			svc.documents = option.MustGet[DocumentReader](opt)
 		case identContextTTL:
 			svc.contextTTL = option.MustGet[time.Duration](opt)
 		case identMaxCandidates:

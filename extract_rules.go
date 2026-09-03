@@ -25,14 +25,16 @@ type Document struct {
 	ContentHash string
 }
 
-// DocumentStore reads the documents that rules are extracted from.
+// DocumentReader reads the instruction documents that rules are extracted from.
+// It only reads: nothing here persists a document, and the file stays the thing
+// a record is later revalidated against.
 //
 // It is an interface so the domain package stays free of filesystem access, and
 // so the implementation can enforce which documents are readable at all. That
 // restriction matters: this is the one place where a caller names a path, and
 // reporting whether a quote appears in a file is enough to read that file back
 // a piece at a time.
-type DocumentStore interface {
+type DocumentReader interface {
 	Read(ctx context.Context, path string) (*Document, error)
 }
 

@@ -39,7 +39,7 @@ func extractService(t *testing.T) (mecp.Service, string) {
 
 	svc, err := mecp.New(store,
 		mecp.WithClock(mecp.FixedClock{Time: testNow}),
-		mecp.WithDocumentStore(source.NewDocumentStore([]string{root})),
+		mecp.WithDocumentReader(source.NewDocumentReader([]string{root})),
 	)
 	require.NoError(t, err)
 	return svc, docPath
