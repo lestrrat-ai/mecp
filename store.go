@@ -151,6 +151,12 @@ type Store interface {
 	// UpdateProposal writes back a reviewed proposal.
 	UpdateProposal(ctx context.Context, p *Proposal) error
 
+	// DeleteProposal removes a proposal and its evidence permanently, freeing
+	// its key. A decided proposal otherwise blocks its own key forever, which
+	// is right for a suggestion that was considered and is wrong for one that
+	// only ever existed because of a bug.
+	DeleteProposal(ctx context.Context, id string) error
+
 	// QueryProposals lists proposals matching a filter, newest first.
 	QueryProposals(ctx context.Context, q ProposalQuery) ([]*Proposal, error)
 

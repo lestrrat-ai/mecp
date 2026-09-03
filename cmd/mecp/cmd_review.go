@@ -23,6 +23,7 @@ through repetition.`,
 			reviewApproveCommand(),
 			reviewRejectCommand(),
 			reviewReopenCommand(),
+			reviewRemoveCommand(),
 		},
 	}
 }
@@ -221,6 +222,48 @@ than because the rule was wrong.`,
 		),
 		Action: runReviewReopen,
 	}
+}
+
+func reviewRemoveCommand() *cli.Command {
+	return &cli.Command{
+		Name:      "rm",
+		Usage:     "delete a proposal permanently",
+		ArgsUsage: "<proposal-id>...",
+		Description: `Removes the proposal and frees its key, so the same rule can be filed again
+from scratch.
+
+Prefer "reject" for a suggestion you considered and turned down, because the
+rejection is what stops it coming back. Use this for proposals that should never
+have existed, such as ones a broken extraction produced.`,
+		Flags: append(globalFlags(),
+			&cli.BoolFlag{Name: "yes", Aliases: []string{"y"}, Usage: "skip the confirmation prompt"},
+		),
+		Action: runReviewRemove,
+	}
+}
+
+func runReviewRemove(ctx context.Context, cmd *cli.Command) error {
+	ids := cmd.Args().Slice()
+	if len(ids) == 0 {
+		return fmt.Errorf(`at least one proposal ID is required`)
+	}
+	if !cmd.Bool("yes") {
+		return fmt.Errorf(`this permanently deletes %d proposal(s); re-run with --yes to confirm`, len(ids))
+	}
+
+	rt, err := openRuntime(ctx, cmd, false)
+	if err != nil {
+		return err
+	}
+	defer rt.Close()
+
+	for _, id := range ids {
+		if err := rt.store.DeleteProposal(ctx, id); err != nil {
+			return err
+		}
+		fmt.Printf("%s deleted\n", id)
+	}
+	return nil
 }
 
 func runReviewReopen(ctx context.Context, cmd *cli.Command) error {
