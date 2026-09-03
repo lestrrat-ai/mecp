@@ -202,6 +202,15 @@ func (s *service) extractOne(ctx context.Context, req ExtractRulesRequest, rule 
 	if scope.User == "" {
 		scope.User = req.Caller.PrincipalID
 	}
+	// A condition matches only when a caller passes it, and no caller does
+	// today. A record scoped to one can never be returned, which is exactly as
+	// useless as a rule the document does not contain, so it is refused for the
+	// same reason and at the same moment.
+	if len(scope.Conditions) > 0 {
+		return nil, &RejectedRule{Statement: statement, Quote: quote,
+			Reason: "the scope uses a condition, which only matches when a caller supplies it; " +
+				"scope by repository, path, or task kind instead"}
+	}
 	if scope.Repository != "" && !req.Caller.RepositoryAllowed(scope.Repository) {
 		return nil, &RejectedRule{Statement: statement, Quote: quote,
 			Reason: fmt.Sprintf("client may not propose records for repository %s", scope.Repository)}

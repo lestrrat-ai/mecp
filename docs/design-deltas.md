@@ -147,3 +147,26 @@ authorization model is built on OAuth and applies to the HTTP transports; the
 specification deliberately leaves stdio out and says credentials should come
 from the environment. So authentication and per-client limits arrive together
 with the first remote transport, and not before.
+
+## Conditions cannot be written, only supplied
+
+The design's scope model includes conditions, "valid only when a structured
+condition is met", and the implementation keeps them on a record. What the
+implementation does not do is let a write path set one.
+
+A condition matches only when the caller passes that same key and value on the
+request. Nothing passes any today: not the hook, not an agent calling
+`context_prepare_task`. A record scoped to a condition is therefore unreachable,
+and the first two runs of `context_extract_rules` against a real document
+produced 25 such records, because the field was offered on a write and read like
+something the system already knew.
+
+So `conditions` appears on the read tools, where a caller states facts about the
+call, and on no write tool. `ExtractRules` refuses a rule whose scope carries
+one, for the same reason it refuses a rule whose quote is not in the document:
+both are dead on arrival, and the caller should be told at the moment it makes
+the mistake rather than after the fact.
+
+The field stays on the record model. If a caller ever supplies conditions
+deliberately, records can be written to match them through the administrative
+CLI, which is where a decision that deliberate belongs.

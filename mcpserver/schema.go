@@ -70,10 +70,14 @@ func workspaceSchema() *jsonschema.Schema {
 	}
 }
 
+// conditionsSchema appears only where a caller supplies conditions, never where
+// one is written into a record's scope. A condition matches only when the
+// caller passes it, so a record scoped to one nothing supplies can never be
+// returned, and offering the field on a write invites exactly that.
 func conditionsSchema() *jsonschema.Schema {
 	return &jsonschema.Schema{
 		Type:                 "object",
-		Description:          "Extra facts about the situation, such as language or repository_type, used to match conditional records.",
+		Description:          "Facts about this call that conditional records are matched against. Only what you pass here can match.",
 		AdditionalProperties: &jsonschema.Schema{Type: "string", MaxLength: ptr(256)},
 		MaxProperties:        ptr(16),
 	}
@@ -226,7 +230,6 @@ func proposeRecordSchema() *jsonschema.Schema {
 					"branch_patterns": {Type: "array", MaxItems: ptr(32), Items: &jsonschema.Schema{Type: "string", MaxLength: ptr(512)}},
 					"path_patterns":   {Type: "array", MaxItems: ptr(64), Items: &jsonschema.Schema{Type: "string", MaxLength: ptr(2048)}},
 					"task_kinds":      {Type: "array", MaxItems: ptr(len(mecp.AllTaskKinds)), Items: &jsonschema.Schema{Type: "string", Enum: enumOf(mecp.AllTaskKinds)}},
-					"conditions":      conditionsSchema(),
 				},
 			},
 			"tags": {
@@ -270,7 +273,6 @@ func extractRulesSchema() *jsonschema.Schema {
 				"branch_patterns": {Type: "array", MaxItems: ptr(32), Items: &jsonschema.Schema{Type: "string", MaxLength: ptr(512)}},
 				"path_patterns":   {Type: "array", MaxItems: ptr(64), Items: &jsonschema.Schema{Type: "string", MaxLength: ptr(2048)}},
 				"task_kinds":      {Type: "array", MaxItems: ptr(len(mecp.AllTaskKinds)), Items: &jsonschema.Schema{Type: "string", Enum: enumOf(mecp.AllTaskKinds)}},
-				"conditions":      conditionsSchema(),
 			},
 		}
 	}

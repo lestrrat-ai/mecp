@@ -222,3 +222,56 @@ func TestExtractedProposalsStayInactive(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, pack.Items, "an extracted rule must not act as context before review")
 }
+
+func TestExtractRulesRefusesDeadScopes(t *testing.T) {
+	svc, docPath := extractService(t)
+
+	t.Run("a condition scope is refused, because nothing supplies conditions", func(t *testing.T) {
+		res, err := svc.ExtractRules(t.Context(), mecp.ExtractRulesRequest{
+			Caller:       proposingCaller(),
+			DocumentPath: docPath,
+			Rules: []mecp.ExtractedRule{{
+				Kind:      mecp.KindConstraint,
+				Statement: "Do not use named return values in Go.",
+				Quote:     "Do not use named return values.",
+				Scope:     &mecp.Scope{Conditions: map[string]string{"tool": "bash"}},
+			}},
+		})
+		require.NoError(t, err)
+		require.Empty(t, res.Accepted)
+		require.Len(t, res.Rejected, 1)
+		require.Contains(t, res.Rejected[0].Reason, "condition")
+		require.Contains(t, res.Rejected[0].Reason, "repository, path, or task kind")
+	})
+
+	t.Run("a document-wide condition scope is refused too", func(t *testing.T) {
+		res, err := svc.ExtractRules(t.Context(), mecp.ExtractRulesRequest{
+			Caller:       proposingCaller(),
+			DocumentPath: docPath,
+			Scope:        mecp.Scope{Conditions: map[string]string{"language": "go"}},
+			Rules: []mecp.ExtractedRule{{
+				Kind:      mecp.KindConstraint,
+				Statement: "Do not use named return values in Go.",
+				Quote:     "Do not use named return values.",
+			}},
+		})
+		require.NoError(t, err)
+		require.Len(t, res.Rejected, 1)
+	})
+
+	t.Run("the scopes that do work still go through", func(t *testing.T) {
+		res, err := svc.ExtractRules(t.Context(), mecp.ExtractRulesRequest{
+			Caller:       proposingCaller(),
+			DocumentPath: docPath,
+			Scope:        mecp.Scope{PathPatterns: []string{"*.go"}},
+			Rules: []mecp.ExtractedRule{{
+				Kind:      mecp.KindConstraint,
+				Statement: "Do not use named return values in Go.",
+				Quote:     "Do not use named return values.",
+			}},
+		})
+		require.NoError(t, err)
+		require.Len(t, res.Accepted, 1)
+		require.Empty(t, res.Rejected)
+	})
+}
