@@ -28,12 +28,9 @@ const (
 	ReviewDuplicates ReviewReason = "duplicates_an_active_record"
 )
 
-// minQuoteOverlap is how much of the original wording a statement must retain
-// before it is taken as a rewording rather than a rewrite. Normalizing a table
-// row into a sentence drops a lot of punctuation and little meaning, so the bar
-// is deliberately low; it catches a statement that shares almost nothing with
-// its source.
-const minQuoteOverlap = 0.34
+// minQuoteGrounding is how much of a statement must come from the text it
+// quotes before it is taken as a rewording rather than an invention.
+const minQuoteGrounding = 0.34
 
 // ReviewFlag is one reason a rule was held back.
 type ReviewFlag struct {
@@ -52,12 +49,12 @@ type ReviewFlag struct {
 func (s *service) triage(ctx context.Context, rec *Record, quote, sourceDoc string) ([]ReviewFlag, error) {
 	var flags []ReviewFlag
 
-	if overlap := quoteOverlap(rec.Statement, quote); overlap < minQuoteOverlap {
+	if grounding := quoteGrounding(rec.Statement, quote); grounding < minQuoteGrounding {
 		flags = append(flags, ReviewFlag{
 			Reason: ReviewDrifted,
 			Detail: fmt.Sprintf(
-				"the statement keeps %.0f%% of the wording of the line it came from, which is little enough that the meaning may have changed",
-				overlap*100),
+				"only %.0f%% of the statement's wording appears in the line it quotes, so most of it came from somewhere else",
+				grounding*100),
 		})
 	}
 
@@ -121,24 +118,29 @@ func fromDocument(rec *Record, path string) bool {
 	return false
 }
 
-// quoteOverlap is the share of the quote's words that survive into the
-// statement. It measures in one direction on purpose: a statement may add words
-// to make the rule readable out of context, and that is normalization working
-// rather than drift.
-func quoteOverlap(statement, quote string) float64 {
-	want := contentWords(quote)
-	if len(want) == 0 {
-		return 1
-	}
+// quoteGrounding is the share of the statement's words that appear in the text
+// it quotes.
+//
+// The direction matters. Asking how much of the quote survives punishes
+// summarizing, and summarizing is the job: a table row carries a rule plus its
+// explanation plus its formatting, and a good record keeps only the rule.
+// Asking how much of the statement came from the quote instead catches the
+// failure that matters, which is a statement mostly made up of words the source
+// never used.
+func quoteGrounding(statement, quote string) float64 {
 	have := contentWords(statement)
+	if len(have) == 0 {
+		return 0
+	}
+	source := contentWords(quote)
 
-	var kept int
-	for w := range want {
-		if _, ok := have[w]; ok {
-			kept++
+	var grounded int
+	for w := range have {
+		if _, ok := source[w]; ok {
+			grounded++
 		}
 	}
-	return float64(kept) / float64(len(want))
+	return float64(grounded) / float64(len(have))
 }
 
 // contentWords reduces text to the words that carry meaning, dropping markup
@@ -158,9 +160,16 @@ func contentWords(s string) map[string]struct{} {
 	return out
 }
 
+// triageStopWords are words that say nothing about whether a statement is
+// grounded in its source. Alongside ordinary function words, this holds the
+// imperative glue a normalized rule acquires: a source table row says "BANNED"
+// where the record says "never run", and neither phrasing is evidence of
+// invention.
 var triageStopWords = map[string]struct{}{
 	"the": {}, "and": {}, "for": {}, "not": {}, "use": {}, "using": {}, "with": {},
 	"when": {}, "that": {}, "this": {}, "into": {}, "than": {}, "then": {}, "them": {},
 	"are": {}, "was": {}, "its": {}, "but": {}, "any": {}, "all": {}, "you": {},
 	"your": {}, "from": {}, "line": {},
+	"never": {}, "always": {}, "must": {}, "run": {}, "prefer": {}, "avoid": {},
+	"instead": {}, "rather": {}, "only": {}, "banned": {}, "exceptions": {},
 }
