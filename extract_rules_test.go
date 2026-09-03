@@ -165,7 +165,29 @@ func TestExtractRulesHoldsWhatNeedsAPerson(t *testing.T) {
 		require.Equal(t, mecp.ReviewDrifted, res.Accepted[0].NeedsReview[0].Reason)
 	})
 
-	t.Run("a rule that contradicts an active record", func(t *testing.T) {
+	t.Run("several rules under one heading are siblings, not conflicts", func(t *testing.T) {
+		svc, docPath := extractService(t)
+
+		// A document says many things about one subject. The first activates,
+		// and the rest must not be held merely for sharing its heading.
+		res, err := svc.ExtractRules(t.Context(), mecp.ExtractRulesRequest{
+			Caller: proposingCaller(), DocumentPath: docPath,
+			Rules: []mecp.ExtractedRule{
+				namedReturnRule(),
+				{
+					Kind:      mecp.KindPreference,
+					Subject:   "style",
+					Statement: "Prefer early returns from functions and early continue from loops.",
+					Quote:     "Prefer early returns from functions, and early continue from loops.",
+				},
+			},
+		})
+		require.NoError(t, err)
+		require.Equal(t, 2, res.ActivatedCount)
+		require.Zero(t, res.ReviewCount)
+	})
+
+	t.Run("a rule that contradicts a record from somewhere else", func(t *testing.T) {
 		svc, docPath := extractService(t)
 		store := extractStore(t, svc)
 

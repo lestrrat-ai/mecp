@@ -319,7 +319,7 @@ func (s *service) extractOne(ctx context.Context, req ExtractRulesRequest, rule 
 	}
 	candidate.Normalize(now)
 
-	flags, err := s.triage(ctx, candidate, quote)
+	flags, err := s.triage(ctx, candidate, quote, doc.Path)
 	if err != nil {
 		return refuse(RejectedRule{Statement: statement, Quote: quote, Reason: err.Error()})
 	}

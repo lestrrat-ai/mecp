@@ -44,7 +44,12 @@ type ReviewFlag struct {
 
 // triage decides whether a rule can be activated directly, and says why not
 // when it cannot.
-func (s *service) triage(ctx context.Context, rec *Record, quote string) ([]ReviewFlag, error) {
+//
+// sourceDoc is the document the rule came from. Records already extracted from
+// that same document are siblings rather than rivals: a heading covers several
+// rules, and a document saying five things about killing processes is not a
+// document contradicting itself.
+func (s *service) triage(ctx context.Context, rec *Record, quote, sourceDoc string) ([]ReviewFlag, error) {
 	var flags []ReviewFlag
 
 	if overlap := quoteOverlap(rec.Statement, quote); overlap < minQuoteOverlap {
@@ -73,8 +78,13 @@ func (s *service) triage(ctx context.Context, rec *Record, quote string) ([]Revi
 		if other.ID == rec.ID {
 			continue
 		}
+		// A near-identical statement is a duplicate wherever it came from,
+		// because two records saying the same thing have to be kept in step.
 		if statementSimilarity(other.Statement, rec.Statement) >= 0.8 {
 			duplicates = append(duplicates, other.ID)
+			continue
+		}
+		if fromDocument(other, sourceDoc) {
 			continue
 		}
 		conflicts = append(conflicts, other.ID)
@@ -96,6 +106,19 @@ func (s *service) triage(ctx context.Context, rec *Record, quote string) ([]Revi
 	}
 
 	return flags, nil
+}
+
+// fromDocument reports whether a record was extracted from the given document.
+func fromDocument(rec *Record, path string) bool {
+	if path == "" {
+		return false
+	}
+	for _, src := range rec.Sources {
+		if strings.TrimPrefix(src.Locator, "file://") == path {
+			return true
+		}
+	}
+	return false
 }
 
 // quoteOverlap is the share of the quote's words that survive into the
