@@ -316,8 +316,8 @@ func (s *Server) handleExtractRules(ctx context.Context, _ *mcp.CallToolRequest,
 
 func describeExtraction(res *mecp.ExtractRulesResult) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%d rule(s) queued for review from %s (%d new, %d already waiting).\n",
-		len(res.Accepted), res.DocumentPath, res.CreatedCount, res.PendingCount)
+	fmt.Fprintf(&b, "%d rule(s) stored from %s: %d active now, %d held for the user to review, %d already there.\n",
+		len(res.Accepted), res.DocumentPath, res.ActivatedCount, res.ReviewCount, res.PendingCount)
 
 	if len(res.Rejected) > 0 {
 		fmt.Fprintf(&b, "\n%d rule(s) REFUSED and not stored:\n", len(res.Rejected))
@@ -334,6 +334,14 @@ func describeExtraction(res *mecp.ExtractRulesResult) string {
 		b.WriteString("\nDo not refile these; they will be blocked again until the user acts.\n")
 	}
 
-	b.WriteString("\nNothing is active until the user approves it with \"mecp review\".")
+	if res.ReviewCount > 0 {
+		fmt.Fprintf(&b, "\n%d rule(s) were held rather than activated:\n", res.ReviewCount)
+		for _, a := range res.Accepted {
+			for _, f := range a.NeedsReview {
+				fmt.Fprintf(&b, "- %s\n  %s: %s\n", a.Statement, f.Reason, f.Detail)
+			}
+		}
+		b.WriteString("The user decides those with \"mecp review\".\n")
+	}
 	return b.String()
 }

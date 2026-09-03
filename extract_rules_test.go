@@ -64,63 +64,169 @@ func extractStore(t *testing.T, svc mecp.Service) *sqlite.Store {
 	return store
 }
 
-func TestExtractRules(t *testing.T) {
+func namedReturnRule() mecp.ExtractedRule {
+	return mecp.ExtractedRule{
+		Kind:      mecp.KindConstraint,
+		Subject:   "style",
+		Statement: "Do not use named return values in Go.",
+		Quote:     "Do not use named return values.",
+	}
+}
+
+func TestExtractRulesActivates(t *testing.T) {
 	svc, docPath := extractService(t)
 
 	req := mecp.ExtractRulesRequest{
 		Caller:       proposingCaller(),
 		DocumentPath: docPath,
 		Scope:        mecp.Scope{PathPatterns: []string{"*.go"}},
-		Rules: []mecp.ExtractedRule{
-			{
-				Kind:      mecp.KindConstraint,
-				Subject:   "style",
-				Statement: "Do not use named return values in Go.",
-				Quote:     "Do not use named return values.",
-			},
-			{
-				Kind:      mecp.KindPreference,
-				Subject:   "style",
-				Statement: "Prefer early returns from functions.",
-				Quote:     "- Prefer early returns from functions, and early continue from loops.",
-			},
-		},
+		Rules:        []mecp.ExtractedRule{namedReturnRule()},
 	}
 
-	t.Run("a quoted rule becomes a pending proposal", func(t *testing.T) {
-		res, err := svc.ExtractRules(t.Context(), req)
-		require.NoError(t, err)
-		require.Len(t, res.Accepted, 2)
-		require.Empty(t, res.Rejected)
-		require.Equal(t, 2, res.CreatedCount)
+	res, err := svc.ExtractRules(t.Context(), req)
+	require.NoError(t, err)
+
+	t.Run("a clean rule becomes a record without anyone reviewing it", func(t *testing.T) {
+		require.Len(t, res.Accepted, 1)
+		require.Equal(t, 1, res.ActivatedCount)
+		require.Zero(t, res.ReviewCount)
+		require.NotEmpty(t, res.Accepted[0].RecordID)
+		require.Empty(t, res.Accepted[0].ProposalID)
+		require.Empty(t, res.Accepted[0].NeedsReview)
 	})
 
-	t.Run("the line the quote came from is reported", func(t *testing.T) {
-		res, err := svc.ExtractRules(t.Context(), req)
+	t.Run("the record is live in a context pack", func(t *testing.T) {
+		pack, err := svc.PrepareTask(t.Context(), mecp.PrepareTaskRequest{
+			Caller:    agentCaller(),
+			Task:      "Write a function in helium",
+			Workspace: mecp.Workspace{Repository: heliumRepo, RelevantPaths: []string{"parser.go"}},
+		})
 		require.NoError(t, err)
-		require.Equal(t, 5, res.Accepted[0].Line)
-		require.Equal(t, 6, res.Accepted[1].Line)
+		require.Contains(t, itemIDs(pack.Items), res.Accepted[0].RecordID)
 	})
 
-	t.Run("a bullet marker on the quote is tolerated", func(t *testing.T) {
-		// The second rule quotes the line including its "- ", which a model
-		// copying from the document will often do.
-		res, err := svc.ExtractRules(t.Context(), req)
+	t.Run("it claims the authority configured for documents, not one a model chose", func(t *testing.T) {
+		store := extractStore(t, svc)
+		rec, err := store.GetRecord(t.Context(), res.Accepted[0].RecordID)
 		require.NoError(t, err)
-		require.Empty(t, res.Rejected)
+		require.Equal(t, mecp.AuthorityUser, rec.Authority)
 	})
 
-	t.Run("re-running over an unchanged document queues nothing twice", func(t *testing.T) {
-		res, err := svc.ExtractRules(t.Context(), req)
+	t.Run("it is revalidated against the document it came from", func(t *testing.T) {
+		store := extractStore(t, svc)
+		rec, err := store.GetRecord(t.Context(), res.Accepted[0].RecordID)
 		require.NoError(t, err)
-		require.Zero(t, res.CreatedCount)
-		require.Equal(t, 2, res.PendingCount)
+		require.Equal(t, mecp.ValidateFileAndHash, rec.ValidationPolicy)
+		require.Equal(t, mecp.HashContent(rulesDoc), rec.Sources[0].ContentHash)
 	})
 
-	t.Run("the document hash is recorded so a record can go stale", func(t *testing.T) {
-		res, err := svc.ExtractRules(t.Context(), req)
+	t.Run("re-running the same extraction changes nothing", func(t *testing.T) {
+		again, err := svc.ExtractRules(t.Context(), req)
 		require.NoError(t, err)
-		require.Equal(t, mecp.HashContent(rulesDoc), res.ContentHash)
+		require.Equal(t, res.Accepted[0].RecordID, again.Accepted[0].RecordID)
+		require.False(t, again.Accepted[0].Created)
+		require.Zero(t, again.ActivatedCount)
+
+		store := extractStore(t, svc)
+		all, err := store.QueryRecords(t.Context(), mecp.RecordQuery{})
+		require.NoError(t, err)
+		require.Len(t, all, 1, "a second run must not leave a duplicate behind")
+	})
+
+	t.Run("nothing sits in the review queue", func(t *testing.T) {
+		store := extractStore(t, svc)
+		pending, err := store.QueryProposals(t.Context(), mecp.ProposalQuery{
+			Statuses: []mecp.ProposalStatus{mecp.ProposalPending},
+		})
+		require.NoError(t, err)
+		require.Empty(t, pending)
+	})
+}
+
+func TestExtractRulesHoldsWhatNeedsAPerson(t *testing.T) {
+	t.Run("a statement that shares almost nothing with its quote", func(t *testing.T) {
+		svc, docPath := extractService(t)
+
+		res, err := svc.ExtractRules(t.Context(), mecp.ExtractRulesRequest{
+			Caller:       proposingCaller(),
+			DocumentPath: docPath,
+			Rules: []mecp.ExtractedRule{{
+				Kind:      mecp.KindConstraint,
+				Subject:   "style",
+				Statement: "Deployment happens every Friday afternoon without exception.",
+				Quote:     "Do not use named return values.",
+			}},
+		})
+		require.NoError(t, err)
+		require.Equal(t, 1, res.ReviewCount)
+		require.Zero(t, res.ActivatedCount)
+		require.NotEmpty(t, res.Accepted[0].ProposalID)
+		require.Empty(t, res.Accepted[0].RecordID)
+		require.Equal(t, mecp.ReviewDrifted, res.Accepted[0].NeedsReview[0].Reason)
+	})
+
+	t.Run("a rule that contradicts an active record", func(t *testing.T) {
+		svc, docPath := extractService(t)
+		store := extractStore(t, svc)
+
+		existing := &mecp.Record{
+			ID: "rec_existing", Kind: mecp.KindPreference, Subject: "style",
+			Statement: "Named return values are fine when they document the result.",
+			Scope:     mecp.Scope{User: "local-user"},
+			Authority: mecp.AuthorityUser,
+		}
+		existing.Normalize(testNow)
+		require.NoError(t, store.PutRecord(t.Context(), existing))
+
+		res, err := svc.ExtractRules(t.Context(), mecp.ExtractRulesRequest{
+			Caller: proposingCaller(), DocumentPath: docPath,
+			Rules: []mecp.ExtractedRule{namedReturnRule()},
+		})
+		require.NoError(t, err)
+		require.Equal(t, 1, res.ReviewCount)
+		require.Equal(t, mecp.ReviewConflicts, res.Accepted[0].NeedsReview[0].Reason)
+		require.Contains(t, res.Accepted[0].NeedsReview[0].Related, "rec_existing")
+	})
+
+	t.Run("a rule an active record already covers", func(t *testing.T) {
+		svc, docPath := extractService(t)
+		store := extractStore(t, svc)
+
+		existing := &mecp.Record{
+			ID: "rec_dup", Kind: mecp.KindConstraint, Subject: "style",
+			Statement: "Do not use named return values in Go.",
+			Scope:     mecp.Scope{User: "local-user"},
+			Authority: mecp.AuthorityUser,
+		}
+		existing.Normalize(testNow)
+		require.NoError(t, store.PutRecord(t.Context(), existing))
+
+		res, err := svc.ExtractRules(t.Context(), mecp.ExtractRulesRequest{
+			Caller: proposingCaller(), DocumentPath: docPath,
+			Rules: []mecp.ExtractedRule{namedReturnRule()},
+		})
+		require.NoError(t, err)
+		require.Equal(t, mecp.ReviewDuplicates, res.Accepted[0].NeedsReview[0].Reason)
+	})
+
+	t.Run("a held rule is not live until someone approves it", func(t *testing.T) {
+		svc, docPath := extractService(t)
+
+		_, err := svc.ExtractRules(t.Context(), mecp.ExtractRulesRequest{
+			Caller: proposingCaller(), DocumentPath: docPath,
+			Rules: []mecp.ExtractedRule{{
+				Kind:      mecp.KindConstraint,
+				Statement: "Deployment happens every Friday afternoon without exception.",
+				Quote:     "Do not use named return values.",
+			}},
+		})
+		require.NoError(t, err)
+
+		pack, err := svc.PrepareTask(t.Context(), mecp.PrepareTaskRequest{
+			Caller: agentCaller(), Task: "Deploy something", Workspace: heliumWorkspace(),
+		})
+		require.NoError(t, err)
+		require.Empty(t, pack.Items)
 	})
 }
 
@@ -131,16 +237,9 @@ func TestExtractRulesRefusesUnquotableRules(t *testing.T) {
 		Caller:       proposingCaller(),
 		DocumentPath: docPath,
 		Rules: []mecp.ExtractedRule{
-			{
-				Kind:      mecp.KindConstraint,
-				Statement: "Always deploy straight to production on Fridays.",
-				Quote:     "Always deploy straight to production on Fridays.",
-			},
-			{
-				Kind:      mecp.KindConstraint,
-				Statement: "Do not use named return values in Go.",
-				Quote:     "Do not use named return values.",
-			},
+			{Kind: mecp.KindConstraint, Statement: "Always deploy on Fridays.",
+				Quote: "Always deploy on Fridays."},
+			namedReturnRule(),
 		},
 	})
 	require.NoError(t, err)
@@ -148,11 +247,11 @@ func TestExtractRulesRefusesUnquotableRules(t *testing.T) {
 	t.Run("a rule the document does not contain is refused", func(t *testing.T) {
 		require.Len(t, res.Rejected, 1)
 		require.Contains(t, res.Rejected[0].Reason, "does not appear")
-		require.Contains(t, res.Rejected[0].Statement, "Fridays")
 	})
 
 	t.Run("the rules that do check out still go through", func(t *testing.T) {
 		require.Len(t, res.Accepted, 1)
+		require.Equal(t, 1, res.ActivatedCount)
 	})
 
 	t.Run("the refusal is reported rather than silent", func(t *testing.T) {
@@ -160,12 +259,71 @@ func TestExtractRulesRefusesUnquotableRules(t *testing.T) {
 	})
 }
 
-func TestExtractRulesAuthorization(t *testing.T) {
+func TestExtractRulesRefusesDeadScopes(t *testing.T) {
 	svc, docPath := extractService(t)
 
-	rules := []mecp.ExtractedRule{{
-		Kind: mecp.KindConstraint, Statement: "x.", Quote: "Do not use named return values.",
-	}}
+	rule := namedReturnRule()
+	rule.Scope = &mecp.Scope{Conditions: map[string]string{"tool": "bash"}}
+
+	res, err := svc.ExtractRules(t.Context(), mecp.ExtractRulesRequest{
+		Caller: proposingCaller(), DocumentPath: docPath,
+		Rules: []mecp.ExtractedRule{rule},
+	})
+	require.NoError(t, err)
+	require.Empty(t, res.Accepted)
+	require.Len(t, res.Rejected, 1)
+	require.Contains(t, res.Rejected[0].Reason, "condition")
+}
+
+func TestExtractRulesReportsDecidedCollisions(t *testing.T) {
+	svc, docPath := extractService(t)
+
+	// A drifted statement is held for review, which is the only path that still
+	// creates a proposal, and therefore the only one a decision can block.
+	req := mecp.ExtractRulesRequest{
+		Caller:       proposingCaller(),
+		DocumentPath: docPath,
+		Rules: []mecp.ExtractedRule{{
+			Kind:      mecp.KindConstraint,
+			Statement: "Deployment happens every Friday afternoon without exception.",
+			Quote:     "Do not use named return values.",
+		}},
+	}
+
+	first, err := svc.ExtractRules(t.Context(), req)
+	require.NoError(t, err)
+	require.Equal(t, 1, first.ReviewCount)
+
+	store := extractStore(t, svc)
+	pending, err := store.QueryProposals(t.Context(), mecp.ProposalQuery{
+		Statuses: []mecp.ProposalStatus{mecp.ProposalPending},
+	})
+	require.NoError(t, err)
+	require.NoError(t, mecp.RejectProposal(t.Context(), store, pending[0], "lestrrat", "no", testNow))
+
+	blocked, err := svc.ExtractRules(t.Context(), req)
+	require.NoError(t, err)
+	require.Empty(t, blocked.Accepted, "nothing was stored, so nothing may be reported as accepted")
+	require.Len(t, blocked.Blocked, 1)
+	require.Equal(t, mecp.ProposalRejected, blocked.Blocked[0].Status)
+
+	t.Run("reopening lets it be filed again", func(t *testing.T) {
+		rejected, err := store.QueryProposals(t.Context(), mecp.ProposalQuery{
+			Statuses: []mecp.ProposalStatus{mecp.ProposalRejected},
+		})
+		require.NoError(t, err)
+		require.NoError(t, mecp.ReopenProposal(t.Context(), store, rejected[0], "reconsidered", testNow))
+
+		again, err := svc.ExtractRules(t.Context(), req)
+		require.NoError(t, err)
+		require.Len(t, again.Accepted, 1)
+		require.Empty(t, again.Blocked)
+	})
+}
+
+func TestExtractRulesAuthorization(t *testing.T) {
+	svc, docPath := extractService(t)
+	rules := []mecp.ExtractedRule{namedReturnRule()}
 
 	t.Run("the propose capability is required", func(t *testing.T) {
 		_, err := svc.ExtractRules(t.Context(), mecp.ExtractRulesRequest{
@@ -194,12 +352,8 @@ func TestExtractRulesAuthorization(t *testing.T) {
 		require.Error(t, err)
 	})
 
-	t.Run("without a document store the tool refuses rather than trusting", func(t *testing.T) {
-		store, err := sqlite.Open(filepath.Join(t.TempDir(), "context.db"))
-		require.NoError(t, err)
-		t.Cleanup(func() { store.Close() })
-		require.NoError(t, store.Migrate(t.Context()))
-
+	t.Run("without a document reader the tool refuses rather than trusting", func(t *testing.T) {
+		store := newExtractStore(t)
 		bare, err := mecp.New(store, mecp.WithClock(mecp.FixedClock{Time: testNow}))
 		require.NoError(t, err)
 
@@ -218,184 +372,5 @@ func TestExtractRulesAuthorization(t *testing.T) {
 			Caller: proposingCaller(), DocumentPath: docPath, Rules: many,
 		})
 		require.Equal(t, mecp.CodeInvalidRecord, mecp.CodeOf(err))
-	})
-}
-
-func TestExtractedProposalsStayInactive(t *testing.T) {
-	svc, docPath := extractService(t)
-
-	_, err := svc.ExtractRules(t.Context(), mecp.ExtractRulesRequest{
-		Caller:       proposingCaller(),
-		DocumentPath: docPath,
-		Rules: []mecp.ExtractedRule{{
-			Kind:      mecp.KindConstraint,
-			Statement: "Do not use named return values in Go.",
-			Quote:     "Do not use named return values.",
-		}},
-	})
-	require.NoError(t, err)
-
-	pack, err := svc.PrepareTask(t.Context(), mecp.PrepareTaskRequest{
-		Caller: agentCaller(), Task: "Write a Go function", Workspace: heliumWorkspace(),
-	})
-	require.NoError(t, err)
-	require.Empty(t, pack.Items, "an extracted rule must not act as context before review")
-}
-
-func TestExtractRulesRefusesDeadScopes(t *testing.T) {
-	svc, docPath := extractService(t)
-
-	t.Run("a condition scope is refused, because nothing supplies conditions", func(t *testing.T) {
-		res, err := svc.ExtractRules(t.Context(), mecp.ExtractRulesRequest{
-			Caller:       proposingCaller(),
-			DocumentPath: docPath,
-			Rules: []mecp.ExtractedRule{{
-				Kind:      mecp.KindConstraint,
-				Statement: "Do not use named return values in Go.",
-				Quote:     "Do not use named return values.",
-				Scope:     &mecp.Scope{Conditions: map[string]string{"tool": "bash"}},
-			}},
-		})
-		require.NoError(t, err)
-		require.Empty(t, res.Accepted)
-		require.Len(t, res.Rejected, 1)
-		require.Contains(t, res.Rejected[0].Reason, "condition")
-		require.Contains(t, res.Rejected[0].Reason, "repository, path, or task kind")
-	})
-
-	t.Run("a document-wide condition scope is refused too", func(t *testing.T) {
-		res, err := svc.ExtractRules(t.Context(), mecp.ExtractRulesRequest{
-			Caller:       proposingCaller(),
-			DocumentPath: docPath,
-			Scope:        mecp.Scope{Conditions: map[string]string{"language": "go"}},
-			Rules: []mecp.ExtractedRule{{
-				Kind:      mecp.KindConstraint,
-				Statement: "Do not use named return values in Go.",
-				Quote:     "Do not use named return values.",
-			}},
-		})
-		require.NoError(t, err)
-		require.Len(t, res.Rejected, 1)
-	})
-
-	t.Run("the scopes that do work still go through", func(t *testing.T) {
-		res, err := svc.ExtractRules(t.Context(), mecp.ExtractRulesRequest{
-			Caller:       proposingCaller(),
-			DocumentPath: docPath,
-			Scope:        mecp.Scope{PathPatterns: []string{"*.go"}},
-			Rules: []mecp.ExtractedRule{{
-				Kind:      mecp.KindConstraint,
-				Statement: "Do not use named return values in Go.",
-				Quote:     "Do not use named return values.",
-			}},
-		})
-		require.NoError(t, err)
-		require.Len(t, res.Accepted, 1)
-		require.Empty(t, res.Rejected)
-	})
-}
-
-func TestExtractRulesReportsDecidedCollisions(t *testing.T) {
-	svc, docPath := extractService(t)
-
-	req := mecp.ExtractRulesRequest{
-		Caller:       proposingCaller(),
-		DocumentPath: docPath,
-		Rules: []mecp.ExtractedRule{{
-			Kind:      mecp.KindConstraint,
-			Statement: "Do not use named return values in Go.",
-			Quote:     "Do not use named return values.",
-		}},
-	}
-
-	first, err := svc.ExtractRules(t.Context(), req)
-	require.NoError(t, err)
-	require.Len(t, first.Accepted, 1)
-	require.Equal(t, 1, first.CreatedCount)
-
-	t.Run("a second run while it is still pending is an acceptance", func(t *testing.T) {
-		again, err := svc.ExtractRules(t.Context(), req)
-		require.NoError(t, err)
-		require.Len(t, again.Accepted, 1)
-		require.Zero(t, again.CreatedCount)
-		require.Equal(t, 1, again.PendingCount)
-		require.Empty(t, again.Blocked)
-	})
-
-	t.Run("once rejected, refiling is reported as blocked rather than accepted", func(t *testing.T) {
-		store := extractStore(t, svc)
-		pending, err := store.QueryProposals(t.Context(), mecp.ProposalQuery{
-			Statuses: []mecp.ProposalStatus{mecp.ProposalPending},
-		})
-		require.NoError(t, err)
-		require.NotEmpty(t, pending)
-		require.NoError(t, mecp.RejectProposal(t.Context(), store, pending[0], "lestrrat", "wrong scope", testNow))
-
-		blockedRun, err := svc.ExtractRules(t.Context(), req)
-		require.NoError(t, err)
-		require.Empty(t, blockedRun.Accepted, "nothing was stored, so nothing may be reported as accepted")
-		require.Len(t, blockedRun.Blocked, 1)
-		require.Equal(t, mecp.ProposalRejected, blockedRun.Blocked[0].Status)
-		require.Contains(t, blockedRun.Blocked[0].Reason, "reopen or delete")
-		require.NotEmpty(t, blockedRun.Warnings)
-	})
-
-	t.Run("reopening lets the same rule be filed again", func(t *testing.T) {
-		store := extractStore(t, svc)
-		rejected, err := store.QueryProposals(t.Context(), mecp.ProposalQuery{
-			Statuses: []mecp.ProposalStatus{mecp.ProposalRejected},
-		})
-		require.NoError(t, err)
-		require.NotEmpty(t, rejected)
-
-		require.NoError(t, mecp.ReopenProposal(t.Context(), store, rejected[0], "scope guard added", testNow))
-
-		reopened, err := svc.ExtractRules(t.Context(), req)
-		require.NoError(t, err)
-		require.Len(t, reopened.Accepted, 1)
-		require.Empty(t, reopened.Blocked)
-	})
-}
-
-func TestReopenProposal(t *testing.T) {
-	store := newExtractStore(t)
-	ctx := t.Context()
-
-	p := &mecp.Proposal{
-		ID: "prop_x", Key: "k", Status: mecp.ProposalPending, PrincipalID: "lestrrat",
-		ClientID: "claude-code", Kind: mecp.KindDecision, Subject: "s",
-		Statement: "A rule.", CreatedAt: testNow,
-	}
-	_, _, err := store.PutProposal(ctx, p)
-	require.NoError(t, err)
-
-	t.Run("a pending proposal cannot be reopened", func(t *testing.T) {
-		require.Error(t, mecp.ReopenProposal(ctx, store, p, "", testNow))
-	})
-
-	t.Run("a rejection reopens and keeps both notes", func(t *testing.T) {
-		require.NoError(t, mecp.RejectProposal(ctx, store, p, "lestrrat", "wrong scope", testNow))
-		require.NoError(t, mecp.ReopenProposal(ctx, store, p, "scope guard added", testNow))
-
-		got, err := store.GetProposal(ctx, "prop_x")
-		require.NoError(t, err)
-		require.Equal(t, mecp.ProposalPending, got.Status)
-		require.Nil(t, got.DecidedAt)
-		require.Contains(t, got.DecisionNote, "wrong scope")
-		require.Contains(t, got.DecisionNote, "scope guard added")
-	})
-
-	t.Run("an approved proposal points at its record instead", func(t *testing.T) {
-		approved := &mecp.Proposal{
-			ID: "prop_y", Key: "k2", Status: mecp.ProposalApproved, PrincipalID: "lestrrat",
-			ClientID: "claude-code", Kind: mecp.KindDecision, Subject: "s",
-			Statement: "Another rule.", CreatedAt: testNow, ResultRecordID: "rec_abc",
-		}
-		_, _, err := store.PutProposal(ctx, approved)
-		require.NoError(t, err)
-
-		err = mecp.ReopenProposal(ctx, store, approved, "", testNow)
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "rec_abc")
 	})
 }

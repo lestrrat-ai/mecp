@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -68,15 +69,26 @@ type ExtractRulesRequest struct {
 	// Scope applies to every rule that does not carry its own.
 	Scope Scope
 	Rules []ExtractedRule
+	// Authority is what records from this document claim. The caller sets it
+	// from configuration rather than the model choosing it, because whether a
+	// document is the user's own writing is not something a model can know.
+	Authority Authority
 }
 
-// AcceptedRule reports one rule that became a proposal.
+// AcceptedRule reports one rule that was stored. It is either an active record
+// or, when something about it needs a person, a pending proposal.
 type AcceptedRule struct {
-	ProposalID string `json:"proposal_id"`
+	// RecordID is set when the rule was activated directly.
+	RecordID string `json:"record_id,omitempty"`
+	// ProposalID is set when the rule was held for review instead.
+	ProposalID string `json:"proposal_id,omitempty"`
 	Subject    string `json:"subject"`
 	Statement  string `json:"statement"`
 	Line       int    `json:"line"`
 	Created    bool   `json:"created"`
+	// NeedsReview says why this one was held back, and is empty when it went
+	// straight in.
+	NeedsReview []ReviewFlag `json:"needs_review,omitempty"`
 }
 
 // RejectedRule reports one rule that did not, and why.
@@ -104,10 +116,11 @@ type ExtractRulesResult struct {
 	Accepted     []AcceptedRule `json:"accepted"`
 	Rejected     []RejectedRule `json:"rejected,omitempty"`
 	Blocked      []BlockedRule  `json:"blocked,omitempty"`
-	// CreatedCount is how many proposals this call added to the queue.
-	CreatedCount int `json:"created_count"`
-	// PendingCount is how many were already waiting for review from an earlier
-	// run of the same extraction.
+	// ActivatedCount is how many rules became records without needing anyone.
+	ActivatedCount int `json:"activated_count"`
+	// ReviewCount is how many were held back for a person to look at.
+	ReviewCount int `json:"review_count"`
+	// PendingCount is how many were already waiting from an earlier run.
 	PendingCount int       `json:"pending_count"`
 	Warnings     []Warning `json:"warnings,omitempty"`
 }
@@ -140,6 +153,12 @@ func (s *service) ExtractRules(ctx context.Context, req ExtractRulesRequest) (*E
 	if len(req.Rules) == 0 {
 		return nil, errorf(CodeInvalidRecord, "at least one rule is required")
 	}
+	if req.Authority == "" {
+		req.Authority = s.documentAuthority
+	}
+	if !req.Authority.Valid() {
+		return nil, errorf(CodeInvalidRecord, "unknown authority %q", req.Authority)
+	}
 	if len(req.Rules) > maxExtractedRules {
 		return nil, errorf(CodeInvalidRecord,
 			"at most %d rules may be extracted at once; split the document", maxExtractedRules)
@@ -164,10 +183,13 @@ func (s *service) ExtractRules(ctx context.Context, req ExtractRulesRequest) (*E
 			result.Blocked = append(result.Blocked, *outcome.blocked)
 		default:
 			result.Accepted = append(result.Accepted, *outcome.accepted)
-			if outcome.accepted.Created {
-				result.CreatedCount++
-			} else {
+			switch {
+			case !outcome.accepted.Created:
 				result.PendingCount++
+			case len(outcome.accepted.NeedsReview) > 0:
+				result.ReviewCount++
+			default:
+				result.ActivatedCount++
 			}
 		}
 	}
@@ -178,6 +200,14 @@ func (s *service) ExtractRules(ctx context.Context, req ExtractRulesRequest) (*E
 			Message: fmt.Sprintf(
 				"%d rule(s) were refused; see each one's reason and correct it rather than refiling as is",
 				len(result.Rejected)),
+		})
+	}
+	if result.ReviewCount > 0 {
+		result.Warnings = append(result.Warnings, Warning{
+			Code: WarnConflict,
+			Message: fmt.Sprintf(
+				"%d rule(s) were held for review rather than activated; each says why, and the user decides those",
+				result.ReviewCount),
 		})
 	}
 	if len(result.Blocked) > 0 {
@@ -257,32 +287,83 @@ func (s *service) extractOne(ctx context.Context, req ExtractRulesRequest, rule 
 		subject = deriveSubject(statement)
 	}
 
+	evidence := Source{
+		ID:      NewID("src"),
+		Type:    SourceFile,
+		Locator: "file://" + doc.Path,
+		// The document's hash, so the record is revalidated against the file
+		// and goes stale by itself once the file changes. That is what makes
+		// activating without review safe rather than reckless.
+		ContentHash:      doc.ContentHash,
+		ExactExcerpt:     fmt.Sprintf("line %d: %s", line, quote),
+		CapturedAt:       now,
+		ValidationPolicy: ValidateFileAndHash,
+	}
+
+	// The key is the document and the quote, so re-running an extraction over
+	// an unchanged document neither duplicates a record nor queues one twice.
+	key := "doc:" + doc.Path + ":" + HashContent(quote)
+
+	candidate := &Record{
+		ID:               recordIDForKey(key),
+		Kind:             rule.Kind,
+		Subject:          subject,
+		Statement:        statement,
+		Rationale:        strings.TrimSpace(rule.Rationale),
+		Scope:            scope,
+		Authority:        req.Authority,
+		Status:           StatusActive,
+		ValidationPolicy: ValidateFileAndHash,
+		Tags:             slices.Clone(rule.Tags),
+		Sources:          []Source{evidence},
+	}
+	candidate.Normalize(now)
+
+	flags, err := s.triage(ctx, candidate, quote)
+	if err != nil {
+		return refuse(RejectedRule{Statement: statement, Quote: quote, Reason: err.Error()})
+	}
+
+	// Anything the triage flagged goes to a person. Everything else is a rule
+	// the user already wrote, quoted from their own document, and it becomes a
+	// record now.
+	if len(flags) == 0 {
+		if existing, err := s.recordForKey(ctx, candidate.ID); err != nil {
+			return refuse(RejectedRule{Statement: statement, Quote: quote, Reason: err.Error()})
+		} else if existing != nil {
+			return extractOutcome{accepted: &AcceptedRule{
+				RecordID: existing.ID, Subject: existing.Subject,
+				Statement: existing.Statement, Line: line, Created: false,
+			}}
+		}
+		if err := candidate.Validate(); err != nil {
+			return refuse(RejectedRule{Statement: statement, Quote: quote, Reason: err.Error()})
+		}
+		if err := s.store.PutRecord(ctx, candidate); err != nil {
+			return refuse(RejectedRule{Statement: statement, Quote: quote,
+				Reason: "could not be stored: " + err.Error()})
+		}
+		return extractOutcome{accepted: &AcceptedRule{
+			RecordID: candidate.ID, Subject: candidate.Subject,
+			Statement: candidate.Statement, Line: line, Created: true,
+		}}
+	}
+
 	proposal := &Proposal{
-		ID: NewID("prop"),
-		// The key is the document and the quote, so re-running an extraction
-		// over an unchanged document does not queue everything twice.
-		Key:         "doc:" + doc.Path + ":" + HashContent(quote),
-		Status:      ProposalPending,
-		PrincipalID: req.Caller.PrincipalID,
-		ClientID:    req.Caller.ClientID,
-		Kind:        rule.Kind,
-		Subject:     subject,
-		Statement:   statement,
-		Rationale:   strings.TrimSpace(rule.Rationale),
-		Scope:       scope,
-		Tags:        slices.Clone(rule.Tags),
-		Evidence: []Source{{
-			ID:      NewID("src"),
-			Type:    SourceFile,
-			Locator: "file://" + doc.Path,
-			// The document's hash, so an approved record can be revalidated
-			// against the file and go stale once the file changes.
-			ContentHash:      doc.ContentHash,
-			ExactExcerpt:     fmt.Sprintf("line %d: %s", line, quote),
-			CapturedAt:       now,
-			ValidationPolicy: ValidateFileAndHash,
-		}},
-		CreatedAt: now,
+		ID:           NewID("prop"),
+		Key:          key,
+		Status:       ProposalPending,
+		PrincipalID:  req.Caller.PrincipalID,
+		ClientID:     req.Caller.ClientID,
+		Kind:         rule.Kind,
+		Subject:      subject,
+		Statement:    statement,
+		Rationale:    strings.TrimSpace(rule.Rationale),
+		Scope:        scope,
+		Tags:         slices.Clone(rule.Tags),
+		Evidence:     []Source{evidence},
+		CreatedAt:    now,
+		DecisionNote: "held for review: " + describeFlags(flags),
 	}
 
 	stored, created, err := s.store.PutProposal(ctx, proposal)
@@ -290,10 +371,6 @@ func (s *service) extractOne(ctx context.Context, req ExtractRulesRequest, rule 
 		return refuse(RejectedRule{Statement: statement, Quote: quote,
 			Reason: "could not be stored: " + err.Error()})
 	}
-
-	// A key that matches an already-decided proposal means nothing was stored.
-	// Reporting that as an acceptance is how a caller comes to believe it filed
-	// rules it did not.
 	if !created && stored.Status != ProposalPending {
 		return extractOutcome{blocked: &BlockedRule{
 			Statement:  statement,
@@ -306,12 +383,38 @@ func (s *service) extractOne(ctx context.Context, req ExtractRulesRequest, rule 
 	}
 
 	return extractOutcome{accepted: &AcceptedRule{
-		ProposalID: stored.ID,
-		Subject:    stored.Subject,
-		Statement:  stored.Statement,
-		Line:       line,
-		Created:    created,
+		ProposalID: stored.ID, Subject: stored.Subject, Statement: stored.Statement,
+		Line: line, Created: created, NeedsReview: flags,
 	}}
+}
+
+// recordIDForKey derives a record's identifier from the document and quote it
+// came from. Two extractions of the same line therefore address one record,
+// which makes a re-run idempotent without needing a lookup column.
+func recordIDForKey(key string) string {
+	sum := sha256.Sum256([]byte(key))
+	return "rec_" + idEncoding.EncodeToString(sum[:12])
+}
+
+// recordForKey finds a record an earlier extraction already made from the same
+// quote in the same document, so a re-run neither duplicates nor overwrites it.
+func (s *service) recordForKey(ctx context.Context, id string) (*Record, error) {
+	rec, err := s.store.GetRecord(ctx, id)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf(`cannot check for an existing record: %w`, err)
+	}
+	return rec, nil
+}
+
+func describeFlags(flags []ReviewFlag) string {
+	parts := make([]string, 0, len(flags))
+	for _, f := range flags {
+		parts = append(parts, string(f.Reason))
+	}
+	return strings.Join(parts, ", ")
 }
 
 // findQuote returns the 1-based line where a quote begins, or zero when the

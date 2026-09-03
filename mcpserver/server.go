@@ -222,7 +222,10 @@ Every rule must carry the exact text it came from in "quote", copied rather than
 paraphrased. The server checks each quote against the file and refuses any rule whose
 quote does not appear, so a rule you cannot quote is a rule you should not file.
 
-Nothing becomes active. Everything queues for the user to approve, edit, or reject.`
+A rule that checks out is stored as an active record straight away. One that needs a
+person is held instead: when the statement no longer resembles the line it came from,
+when an active record already says something different about the same subject, or when
+one already says the same thing. The result tells you which happened to each rule.`
 
 // toolError converts a domain error into a tool execution error whose text
 // carries the stable code, so an agent can decide whether a retry is sensible.

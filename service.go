@@ -182,16 +182,17 @@ const (
 )
 
 type service struct {
-	store         Store
-	clock         Clock
-	ranker        Ranker
-	packer        Packer
-	validator     Validator
-	audit         AuditSink
-	documents     DocumentReader
-	contextTTL    time.Duration
-	maxCandidates int
-	aliases       map[string]string
+	store             Store
+	clock             Clock
+	ranker            Ranker
+	packer            Packer
+	validator         Validator
+	audit             AuditSink
+	documents         DocumentReader
+	documentAuthority Authority
+	contextTTL        time.Duration
+	maxCandidates     int
+	aliases           map[string]string
 
 	mu      sync.Mutex
 	handles map[string]*contextHandle
@@ -251,6 +252,8 @@ func New(store Store, options ...ServiceOption) (Service, error) {
 			svc.audit = option.MustGet[AuditSink](opt)
 		case identDocumentReader:
 			svc.documents = option.MustGet[DocumentReader](opt)
+		case identDocumentAuthority:
+			svc.documentAuthority = option.MustGet[Authority](opt)
 		case identContextTTL:
 			svc.contextTTL = option.MustGet[time.Duration](opt)
 		case identMaxCandidates:
@@ -277,6 +280,11 @@ func New(store Store, options ...ServiceOption) (Service, error) {
 		}
 	}
 
+	if svc.documentAuthority == "" {
+		// Document roots are named deliberately in configuration, so what they
+		// hold is the user's own writing rather than something found.
+		svc.documentAuthority = AuthorityUser
+	}
 	if svc.maxCandidates <= 0 {
 		svc.maxCandidates = defaultMaxCandidates
 	}

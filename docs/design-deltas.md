@@ -170,3 +170,38 @@ the mistake rather than after the fact.
 The field stays on the record model. If a caller ever supplies conditions
 deliberately, records can be written to match them through the administrative
 CLI, which is where a decision that deliberate belongs.
+
+## Extracted rules activate without review
+
+Decision D5 disables agent writes and says the proposal tool "creates pending
+proposals only". `context_extract_rules` does not follow that. A rule that
+passes its checks becomes an active record immediately, and only rules that need
+a person are queued.
+
+The principle behind D5 is that an agent's own inference must not become
+authority by repetition, and it still holds for `context_propose_record`, where
+an agent claims something it concluded from a conversation and has nothing to
+check against.
+
+Extraction is a different case. The rule is copied out of a document the user
+wrote, its quote is verified against that document, and the model's contribution
+is the wording, the kind, and the scope. Queuing all of that produced 24 items on
+the first real run, which is a queue nobody works. A safeguard nobody performs is
+not a safeguard; it is a store that stays empty.
+
+What is queued instead is what a person actually has to settle: a statement that
+retains almost none of the wording of the line it came from, a rule contradicting
+an active record on the same subject, and a rule repeating one. Those are the
+cases where being wrong does not correct itself.
+
+Three things make activation safe rather than reckless here. The quote must be in
+the document, so nothing invented gets in. Every record carries the document's
+hash under `file_path_and_hash`, so editing the source marks the record stale
+rather than letting it drift. And the record's identifier is derived from the
+document and quote, so re-running an extraction addresses the same record instead
+of accumulating copies.
+
+Authority comes from configuration rather than the model. A document root is
+named deliberately, so what it holds is taken as the user's own writing and
+records claim `explicit_user`; `document_authority` changes that for roots where
+it is not true.

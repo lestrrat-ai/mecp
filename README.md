@@ -73,7 +73,7 @@ The portable one is an instruction in your global or per-repository agent file:
 | `context_search` | Follow-up question inside an already authorized scope. | yes |
 | `context_get_records` | Full records and quoted sources, for IDs already returned. | yes |
 | `context_propose_record` | Files a suggestion for you to review. Changes nothing. | no |
-| `context_extract_rules` | Reads an instruction document and queues its rules for review. | no |
+| `context_extract_rules` | Reads an instruction document and stores the rules it finds. | no |
 
 `context_prepare_task` does the work. An agent cannot guess which old terms to
 search for, so it sends the task and the workspace, and the server resolves the
@@ -143,9 +143,16 @@ other route is `context_extract_rules`, where an agent reads the document and
 decides, then files what it found. Judgement is the model's and the checking is
 mecp's: each rule must carry the exact text it came from, the server confirms
 that text is really in the file, and a rule it cannot find is refused. Both
-routes end in a review queue rather than in active records, and `mecp distill`
-doubles as the check on the model, because a large gap between the two counts
-says the model dropped something.
+`mecp distill` doubles as the check on the model, because a large gap between the
+two counts says the model dropped something.
+
+A rule that checks out is stored as an active record without anyone reviewing
+it. The review queue holds only what actually needs you: a statement that no
+longer resembles the line it came from, one that contradicts an active record,
+or one that repeats it. A queue holding everything is a queue nobody works, and
+a rule copied from your own document with its quote already checked is not a
+guess. It stays reversible, and because each record carries the document's hash
+it goes stale by itself when you edit the source.
 
 The tool reads only inside `document_roots`, which is empty by default. Naming a
 path and learning whether a quote appears in it is enough to read a file back a
