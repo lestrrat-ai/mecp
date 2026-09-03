@@ -112,8 +112,11 @@ tags: [conformance, release]
 Markdown uses YAML front matter, the body as the statement, and an optional
 `## Rationale` section. There are examples in [seed/](seed/).
 
-Imported records get `sourced_import` authority. The importer will not claim you
-said something.
+Imported records get `sourced_import` authority, which agents read as background
+information rather than as rules. The importer will not claim you said
+something. For material you wrote yourself, import it with `--mine`, or declare
+`authority:` in the file. An import that produces records with no force says so
+on stderr rather than leaving you to work it out from an empty-looking pack.
 
 ## How a record gets picked
 
