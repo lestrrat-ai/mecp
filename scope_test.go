@@ -21,6 +21,31 @@ func TestCanonicalRepository(t *testing.T) {
 		}
 	})
 
+	t.Run("a bare host and path resolves like the URL", func(t *testing.T) {
+		// This is how an agent names a repository when it has not read the git
+		// remote, and it was silently becoming an identity of its own.
+		for _, in := range []string{
+			"github.com/lestrrat-go/helium",
+			"github.com/lestrrat-go/helium.git",
+			"github.com/lestrrat-go/helium/",
+			"GitHub.com/lestrrat-go/helium",
+		} {
+			require.Equal(t, heliumRepo, mecp.CanonicalRepository(in), in)
+		}
+	})
+
+	t.Run("a local path is not mistaken for a host", func(t *testing.T) {
+		for _, in := range []string{
+			"/home/lestrrat/dev/helium",
+			"../helium",
+			"./helium",
+			"helium",
+			"my-notes/helium",
+		} {
+			require.NotContains(t, mecp.CanonicalRepository(in), "https://", in)
+		}
+	})
+
 	t.Run("a fork stays distinct from its upstream", func(t *testing.T) {
 		fork := mecp.CanonicalRepository("git@github.com:someone-else/helium.git")
 		require.NotEqual(t, heliumRepo, fork)

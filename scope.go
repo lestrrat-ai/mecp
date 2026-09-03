@@ -350,12 +350,18 @@ func CanonicalRepository(in string) string {
 		return ""
 	}
 
-	// scp-like syntax: git@github.com:owner/repo.git
 	if !strings.Contains(in, "://") {
+		// scp-like syntax: git@github.com:owner/repo.git
 		if host, rest, ok := strings.Cut(in, ":"); ok && !strings.HasPrefix(rest, "//") {
 			if _, h, found := strings.Cut(host, "@"); found {
 				host = h
 			}
+			return normalizeRepoParts(host, rest)
+		}
+		// Bare "github.com/owner/repo", which is how an agent usually names a
+		// repository when it has not read the git remote. Without this it would
+		// become an identity of its own and quietly match no record.
+		if host, rest, ok := strings.Cut(in, "/"); ok && looksLikeHost(host) {
 			return normalizeRepoParts(host, rest)
 		}
 		return strings.ToLower(in)
@@ -397,4 +403,19 @@ func RepositoryOrg(canonical string) string {
 		return ""
 	}
 	return strings.ToLower(parts[0] + "/" + parts[1])
+}
+
+// looksLikeHost reports whether a path's first segment is a hostname rather
+// than a directory. A hostname carries a dot and is not a relative-path
+// element, which is what separates "github.com/owner/repo" from "../owner/repo"
+// and from an ordinary directory name.
+func looksLikeHost(segment string) bool {
+	if segment == "" || segment == "." || segment == ".." {
+		return false
+	}
+	if !strings.Contains(segment, ".") {
+		return false
+	}
+	// A leading or trailing dot is a filename, not a host.
+	return !strings.HasPrefix(segment, ".") && !strings.HasSuffix(segment, ".")
 }
