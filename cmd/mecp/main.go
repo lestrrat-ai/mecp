@@ -50,6 +50,7 @@ Agents reach it over MCP ("mecp mcp"). The user curates it with the record,
 review, import, and export commands.`,
 		Commands: []*cli.Command{
 			initCommand(),
+			distillCommand(),
 			mcpCommand(),
 			prepareCommand(),
 			searchCommand(),

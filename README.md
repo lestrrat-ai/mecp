@@ -112,6 +112,25 @@ tags: [conformance, release]
 Markdown uses YAML front matter, the body as the statement, and an optional
 `## Rationale` section. There are examples in [seed/](seed/).
 
+To move an existing instruction file in, `mecp distill` converts it to candidate
+records rather than making you retype them:
+
+```sh
+mecp distill ~/.claude/docs/go.md --mine --path '*.go' -o go-rules.yaml
+$EDITOR go-rules.yaml
+mecp import go-rules.yaml
+```
+
+It takes the structure the document already has. A bullet is a rule, a numbered
+step is a rule, a table row is a rule, and the nearest heading is the subject.
+Prose paragraphs are counted and skipped rather than guessed at, and the line
+numbers are reported so you can see what was left behind. Scope is not inferred,
+because a wrong scope is worse than none; set it for the whole file with the
+flags and correct individual records in the YAML.
+
+Each record keeps its original line verbatim as evidence and a hash of the file
+it came from, so once the document changes the record shows as stale.
+
 Imported records get `sourced_import` authority, which agents read as background
 information rather than as rules. The importer will not claim you said
 something. For material you wrote yourself, import it with `--mine`, or declare
