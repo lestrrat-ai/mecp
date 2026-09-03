@@ -321,12 +321,13 @@ func (s *service) extractOne(ctx context.Context, req ExtractRulesRequest, rule 
 		ValidationPolicy: ValidateFileAndHash,
 	}
 
-	// The key is the document and the quote, so re-running an extraction over
-	// an unchanged document neither duplicates a record nor queues one twice.
-	key := "doc:" + doc.Path + ":" + HashContent(quote)
+	// The key is the document and the quote, normalized the same way the quote
+	// is matched. Two callers quoting one line, one of them keeping its "- "
+	// bullet marker, mean the same rule and must not become two records.
+	key := DocumentRuleKey(doc.Path, quote)
 
 	candidate := &Record{
-		ID:               recordIDForKey(key),
+		ID:               RecordIDForKey(key),
 		Kind:             rule.Kind,
 		Subject:          subject,
 		Statement:        statement,
@@ -409,10 +410,17 @@ func (s *service) extractOne(ctx context.Context, req ExtractRulesRequest, rule 
 	}}
 }
 
-// recordIDForKey derives a record's identifier from the document and quote it
+// DocumentRuleKey identifies one rule within one document. It is exported
+// because approving a proposal has to arrive at the same identity that direct
+// activation would, or the two paths produce two records for one rule.
+func DocumentRuleKey(path, quote string) string {
+	return "doc:" + path + ":" + HashContent(normalizeQuote(quote))
+}
+
+// RecordIDForKey derives a record's identifier from the document and quote it
 // came from. Two extractions of the same line therefore address one record,
 // which makes a re-run idempotent without needing a lookup column.
-func recordIDForKey(key string) string {
+func RecordIDForKey(key string) string {
 	sum := sha256.Sum256([]byte(key))
 	return "rec_" + idEncoding.EncodeToString(sum[:12])
 }

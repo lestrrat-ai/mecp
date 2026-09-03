@@ -469,3 +469,62 @@ func TestExtractRulesReportsUncoveredLines(t *testing.T) {
 		require.Empty(t, full.Uncovered)
 	})
 }
+
+func TestRecordIdentityIsStableAcrossQuotingAndPaths(t *testing.T) {
+	svc, docPath := extractService(t)
+	store := extractStore(t, svc)
+
+	bare := namedReturnRule()
+	withMarker := namedReturnRule()
+	withMarker.Quote = "- Do not use named return values."
+
+	t.Run("quoting a line with or without its bullet is one rule", func(t *testing.T) {
+		first, err := svc.ExtractRules(t.Context(), mecp.ExtractRulesRequest{
+			Caller: proposingCaller(), DocumentPath: docPath,
+			Rules: []mecp.ExtractedRule{bare},
+		})
+		require.NoError(t, err)
+
+		second, err := svc.ExtractRules(t.Context(), mecp.ExtractRulesRequest{
+			Caller: proposingCaller(), DocumentPath: docPath,
+			Rules: []mecp.ExtractedRule{withMarker},
+		})
+		require.NoError(t, err)
+
+		require.Equal(t, first.Accepted[0].RecordID, second.Accepted[0].RecordID)
+
+		all, err := store.QueryRecords(t.Context(), mecp.RecordQuery{})
+		require.NoError(t, err)
+		require.Len(t, all, 1)
+	})
+
+	t.Run("approving a held proposal lands on the same record", func(t *testing.T) {
+		svc, docPath := extractService(t)
+		store := extractStore(t, svc)
+
+		// A drifted statement is held, and approving it must produce the
+		// identifier direct activation would have, not a fresh one.
+		res, err := svc.ExtractRules(t.Context(), mecp.ExtractRulesRequest{
+			Caller: proposingCaller(), DocumentPath: docPath,
+			Rules: []mecp.ExtractedRule{{
+				Kind:      mecp.KindConstraint,
+				Subject:   "style",
+				Statement: "Deployment happens every Friday afternoon without exception.",
+				Quote:     "Do not use named return values.",
+			}},
+		})
+		require.NoError(t, err)
+		require.Equal(t, 1, res.ReviewCount)
+
+		pending, err := store.QueryProposals(t.Context(), mecp.ProposalQuery{
+			Statuses: []mecp.ProposalStatus{mecp.ProposalPending},
+		})
+		require.NoError(t, err)
+
+		rec, err := mecp.ApproveProposal(t.Context(), store, pending[0], "lestrrat", nil, testNow)
+		require.NoError(t, err)
+
+		want := mecp.RecordIDForKey(mecp.DocumentRuleKey(pending[0].Evidence[0].Locator[len("file://"):], "Do not use named return values."))
+		require.Equal(t, want, rec.ID)
+	})
+}

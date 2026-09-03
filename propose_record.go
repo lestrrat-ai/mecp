@@ -125,8 +125,16 @@ func ApproveProposal(ctx context.Context, store Store, p *Proposal, approver str
 		return nil, errorf(CodeInvalidRecord, "proposal %s is already %s", p.ID, p.Status)
 	}
 
+	// A proposal that came from a document carries that document's rule key, so
+	// approving it must produce the identifier direct activation would have
+	// produced. Otherwise one rule ends up stored twice, once per path.
+	id := NewID("rec")
+	if strings.HasPrefix(p.Key, "doc:") {
+		id = RecordIDForKey(p.Key)
+	}
+
 	rec := &Record{
-		ID:               NewID("rec"),
+		ID:               id,
 		Kind:             p.Kind,
 		Subject:          p.Subject,
 		Statement:        p.Statement,
