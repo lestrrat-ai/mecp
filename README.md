@@ -40,8 +40,24 @@ Go, so there is no cgo and nothing to install alongside it.
 }
 ```
 
-A model will not call a tool just because it exists. Add an instruction to your
-global or per-repository agent file:
+A model will not call a tool just because it exists. There are two ways to deal
+with that, and they are not exclusive.
+
+The reliable one is a hook, which runs mecp itself and puts the result in front
+of the model whether or not it would have asked. It also fills in the workspace
+from git rather than letting the model guess, and takes the files a prompt names
+as the relevant paths. Claude Code only, since Codex has no hooks:
+
+```json
+{"hooks": {"UserPromptSubmit": [{"hooks": [
+  {"type": "command", "command": "mecp hook --client claude-code"}
+]}]}}
+```
+
+It never blocks a turn. A missing database, a timeout, or malformed input exits
+quietly with no output, because a broken hook must not stop you working.
+
+The portable one is an instruction in your global or per-repository agent file:
 
 > Before planning or executing a nontrivial coding task, call
 > `context_prepare_task` with the task and the current workspace. Use
