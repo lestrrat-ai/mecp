@@ -92,6 +92,15 @@ type Defaults struct {
 	SearchLimit           int      `yaml:"search_limit"`
 	ContextTTL            Duration `yaml:"context_ttl"`
 	MaxCandidates         int      `yaml:"max_candidates"`
+
+	// MinSearchScore and MinSearchRelevance are floors a lexical search hit
+	// must clear to be returned at all. They are pointers so that an omitted
+	// key keeps the store's own default while an explicit 0 disables the
+	// floor, which a plain float64 cannot express. See
+	// sqlite.WithMinSearchScore and sqlite.WithMinSearchRelevance for what
+	// each one means.
+	MinSearchScore     *float64 `yaml:"min_search_score,omitempty"`
+	MinSearchRelevance *float64 `yaml:"min_search_relevance,omitempty"`
 }
 
 // Validation controls freshness checking.

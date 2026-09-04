@@ -22,17 +22,21 @@ import (
 
 // Store is a SQLite-backed mecp.Store. It is safe for concurrent use.
 type Store struct {
-	db       *sql.DB
-	path     string
-	readOnly bool
+	db           *sql.DB
+	path         string
+	readOnly     bool
+	minScore     float64
+	minRelevance float64
 }
 
 // Option configures Open.
 type Option func(*openConfig)
 
 type openConfig struct {
-	readOnly    bool
-	busyTimeout time.Duration
+	readOnly     bool
+	busyTimeout  time.Duration
+	minScore     float64
+	minRelevance float64
 }
 
 // WithReadOnly opens the database without write access. Agent-facing MCP
@@ -43,10 +47,20 @@ func WithReadOnly(v bool) Option { return func(c *openConfig) { c.readOnly = v }
 // WithBusyTimeout sets how long a statement waits for a competing writer.
 func WithBusyTimeout(d time.Duration) Option { return func(c *openConfig) { c.busyTimeout = d } }
 
+// WithMinSearchScore overrides defaultMinScore, the absolute bm25 floor a
+// search hit must clear to be returned at all. Zero disables the floor: every
+// bm25 hit scores strictly positive, so nothing is ever excluded by it.
+func WithMinSearchScore(v float64) Option { return func(c *openConfig) { c.minScore = v } }
+
+// WithMinSearchRelevance overrides defaultMinRelevance, the fraction of the
+// best hit in a result set that a weaker hit must still reach to survive.
+// Zero disables the floor, since relevance is never negative.
+func WithMinSearchRelevance(v float64) Option { return func(c *openConfig) { c.minRelevance = v } }
+
 // Open connects to the database at path, creating the containing directory
 // when the store is writable.
 func Open(path string, options ...Option) (*Store, error) {
-	cfg := openConfig{busyTimeout: 5 * time.Second}
+	cfg := openConfig{busyTimeout: 5 * time.Second, minScore: defaultMinScore, minRelevance: defaultMinRelevance}
 	for _, opt := range options {
 		opt(&cfg)
 	}
@@ -72,7 +86,13 @@ func Open(path string, options ...Option) (*Store, error) {
 		db.SetMaxOpenConns(1)
 	}
 
-	return &Store{db: db, path: path, readOnly: cfg.readOnly}, nil
+	return &Store{
+		db:           db,
+		path:         path,
+		readOnly:     cfg.readOnly,
+		minScore:     cfg.minScore,
+		minRelevance: cfg.minRelevance,
+	}, nil
 }
 
 func dsn(path string, cfg openConfig) string {

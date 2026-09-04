@@ -46,7 +46,17 @@ func openRuntime(ctx context.Context, cmd *cli.Command, readOnly bool) (*runtime
 		return nil, err
 	}
 
-	store, err := sqlite.Open(cfg.Database, sqlite.WithReadOnly(readOnly))
+	// A nil pointer means the key was absent, which keeps the store default.
+	// An explicit zero is a request to turn the floor off, so it is passed
+	// through rather than treated as "unset".
+	storeOptions := []sqlite.Option{sqlite.WithReadOnly(readOnly)}
+	if v := cfg.Defaults.MinSearchScore; v != nil {
+		storeOptions = append(storeOptions, sqlite.WithMinSearchScore(*v))
+	}
+	if v := cfg.Defaults.MinSearchRelevance; v != nil {
+		storeOptions = append(storeOptions, sqlite.WithMinSearchRelevance(*v))
+	}
+	store, err := sqlite.Open(cfg.Database, storeOptions...)
 	if err != nil {
 		return nil, err
 	}

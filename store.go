@@ -60,7 +60,13 @@ type SearchQuery struct {
 type ScoredRecord struct {
 	Record    *Record
 	Relevance float64
-	Terms     []string
+	// RawScore is the un-normalized bm25-derived score (larger is better),
+	// kept alongside Relevance because Relevance is only ever meaningful
+	// relative to the best hit in the same result set: a lone weak match still
+	// gets a Relevance of 1.00. RawScore lets a caller judge a hit against an
+	// absolute floor instead.
+	RawScore float64
+	Terms    []string
 }
 
 // ProposalStatus is the review state of an agent-submitted proposal.
