@@ -65,8 +65,12 @@ func Open(path string, options ...Option) (*Store, error) {
 		opt(&cfg)
 	}
 
-	if !cfg.readOnly && path != ":memory:" {
-		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	if path != ":memory:" {
+		if cfg.readOnly {
+			if err := checkStoreExists(path); err != nil {
+				return nil, err
+			}
+		} else if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			return nil, fmt.Errorf(`failed to create database directory: %w`, err)
 		}
 	}
@@ -93,6 +97,26 @@ func Open(path string, options ...Option) (*Store, error) {
 		minScore:     cfg.minScore,
 		minRelevance: cfg.minRelevance,
 	}, nil
+}
+
+// checkStoreExists fails fast, before the driver ever gets a handle, so that a
+// missing store is reported as a missing store rather than as the SQLite
+// driver's bare "unable to open database file" code. Read-only mode cannot
+// create the file itself, so a typo in the path would otherwise open nothing,
+// report zero records, and look indistinguishable from an empty store.
+//
+// A file that exists but cannot be read is a different, genuine failure — a
+// permissions problem or a corrupted file — and keeps its own message rather
+// than being folded into the "does not exist" case.
+func checkStoreExists(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf(`database %s does not exist; run "mecp init" to create it`, path)
+		}
+		return fmt.Errorf(`failed to open database %s: %w`, path, err)
+	}
+	return f.Close()
 }
 
 func dsn(path string, cfg openConfig) string {

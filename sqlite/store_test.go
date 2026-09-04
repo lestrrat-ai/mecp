@@ -1,7 +1,9 @@
 package sqlite_test
 
 import (
+	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -24,6 +26,40 @@ func mustRecord(t *testing.T, rec *mecp.Record) *mecp.Record {
 	rec.Normalize(time.Date(2026, 7, 3, 0, 0, 0, 0, time.UTC))
 	require.NoError(t, rec.Validate())
 	return rec
+}
+
+func TestOpenReadOnlyMissingFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "context.db")
+
+	_, err := sqlite.Open(path, sqlite.WithReadOnly(true))
+	require.ErrorContains(t, err, path)
+	require.ErrorContains(t, err, "does not exist")
+	require.ErrorContains(t, err, "mecp init")
+
+	_, statErr := os.Stat(path)
+	require.True(t, os.IsNotExist(statErr), "a failed read-only open must not create the file")
+}
+
+func TestOpenReadOnlyUnreadableFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("file permission bits do not restrict reads this way on windows")
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "context.db")
+	store, err := sqlite.Open(path)
+	require.NoError(t, err)
+	require.NoError(t, store.Migrate(t.Context()))
+	require.NoError(t, store.Close())
+
+	require.NoError(t, os.Chmod(path, 0o000))
+	t.Cleanup(func() { os.Chmod(path, 0o600) })
+
+	_, err = sqlite.Open(path, sqlite.WithReadOnly(true))
+	require.Error(t, err)
+	require.ErrorContains(t, err, path)
+	require.NotContains(t, err.Error(), "does not exist",
+		"a file that exists but cannot be read must not be reported as missing")
 }
 
 func TestRecordRoundTrip(t *testing.T) {
