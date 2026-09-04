@@ -50,6 +50,28 @@ read-only unless the client profile can propose, and a read-only store cannot
 accept the SQLite sink. Rather than silently dropping the audit trail, that
 configuration falls back to JSONL and says so on stderr.
 
+`mecp audit` reads back from whichever sink `audit:` selects, so the default
+installation is readable without opening the log file by hand. Because the
+fallback above can leave events in both places, a run against the SQLite sink
+says on stderr when the JSONL log is non-empty as well.
+
+## Audit events also record the interface the call came through
+
+The design's audit event lists the client profile and the principal, which
+between them do not say whether a call arrived over MCP or from the CLI. The CLI
+runs the same code path on purpose, so `mecp prepare --client claude-code`
+writes a line identical to the one that agent's own call writes, and the trail
+cannot answer what actually happened.
+
+Every event therefore carries an `origin`, stamped by the boundary the call came
+through: `mcpserver.New` sets `mcp` over whatever it was handed, and the CLI
+sets `cli` where it resolves an identity. The service copies it from the caller
+in one place, so a new operation cannot ship an event without one.
+
+The field is absent from events written before it existed. Those decode to an
+empty origin and display as `unknown`, which is neither interface: an old line
+is never read as an agent call, and no migration is needed for either sink.
+
 ## Context handles are in-process
 
 The design describes a context-pack cache keyed by principal, client, revision,
@@ -87,3 +109,196 @@ These are named in the design and deliberately left out of the initial version.
   would feed is complete.
 - **A local review UI.** `mecp review` shows the proposed statement beside the
   quoted evidence, which is the side-by-side comparison the design asks for.
+
+## There are no privacy labels
+
+The design gives every record one of four sensitivity levels, gives every
+client profile a ceiling, and gates verbatim evidence through a second set of
+capabilities. None of that is implemented. A record has no privacy field, and a
+profile has no ceiling.
+
+The reasoning is that every record exists to be sent to a model. A record you
+would never send does nothing, so the rule is not to store it in the first
+place. That is the same reasoning the design already applies to credentials,
+carried to its conclusion. A ladder of levels also assumes agents can be ranked
+from less to more trusted, and Claude Code and Codex are not ranked. They are
+two different companies.
+
+Removing the ladder removes something real, so what remains is worth stating.
+The principal and the repository allowlist still contain disclosure, and they
+are what keep one project's context out of another. `context:evidence` still
+separates reading a record's normalized statement from reading the verbatim
+source text it was made from, because that text is the raw material and it is
+the field a prompt injection arrives in.
+
+Two capabilities went with the levels. `context:search:project` and
+`context:search:personal` became `context:search`; `context:evidence:project`
+and `context:evidence:personal` became `context:evidence`.
+
+## A client profile is not a security control
+
+The profile is chosen by a command-line flag in the MCP host's configuration,
+so anyone who can edit that file can select any profile. On stdio that is not a
+weakness, because the process boundary is already the identity: whoever can
+launch the server runs as the user and can open the database directly.
+
+It stops being true the moment a socket or an HTTP endpoint exists. MCP's
+authorization model is built on OAuth and applies to the HTTP transports; the
+specification deliberately leaves stdio out and says credentials should come
+from the environment. So authentication and per-client limits arrive together
+with the first remote transport, and not before.
+
+## Conditions cannot be written, only supplied
+
+The design's scope model includes conditions, "valid only when a structured
+condition is met", and the implementation keeps them on a record. What the
+implementation does not do is let a write path set one.
+
+A condition matches only when the caller passes that same key and value on the
+request. Nothing passes any today: not the hook, not an agent calling
+`context_prepare_task`. A record scoped to a condition is therefore unreachable,
+and the first two runs of `context_extract_rules` against a real document
+produced 25 such records, because the field was offered on a write and read like
+something the system already knew.
+
+So `conditions` appears on the read tools, where a caller states facts about the
+call, and on no write tool. `ExtractRules` refuses a rule whose scope carries
+one, for the same reason it refuses a rule whose quote is not in the document:
+both are dead on arrival, and the caller should be told at the moment it makes
+the mistake rather than after the fact.
+
+The field stays on the record model. If a caller ever supplies conditions
+deliberately, records can be written to match them through the administrative
+CLI, which is where a decision that deliberate belongs.
+
+## Extracted rules activate without review
+
+Decision D5 disables agent writes and says the proposal tool "creates pending
+proposals only". `context_extract_rules` does not follow that. A rule that
+passes its checks becomes an active record immediately, and only rules that need
+a person are queued.
+
+The principle behind D5 is that an agent's own inference must not become
+authority by repetition, and it still holds for `context_propose_record`, where
+an agent claims something it concluded from a conversation and has nothing to
+check against.
+
+Extraction is a different case. The rule is copied out of a document the user
+wrote, its quote is verified against that document, and the model's contribution
+is the wording, the kind, and the scope. Queuing all of that produced 24 items on
+the first real run, which is a queue nobody works. A safeguard nobody performs is
+not a safeguard; it is a store that stays empty.
+
+What is queued instead is what a person actually has to settle: a statement that
+retains almost none of the wording of the line it came from, a rule contradicting
+an active record on the same subject, and a rule repeating one. Those are the
+cases where being wrong does not correct itself.
+
+Three things make activation safe rather than reckless here. The quote must be in
+the document, so nothing invented gets in. Every record carries the document's
+hash under `file_path_and_hash`, so editing the source marks the record stale
+rather than letting it drift. And the record's identifier is derived from the
+document and quote, so re-running an extraction addresses the same record instead
+of accumulating copies.
+
+Authority comes from configuration rather than the model. A document root is
+named deliberately, so what it holds is taken as the user's own writing and
+records claim `explicit_user`; `document_authority` changes that for roots where
+it is not true.
+
+## Extraction checks its own coverage
+
+`mecp distill` parses a document mechanically, and `context_extract_rules` takes
+a model's judgement about the same document. Comparing the two catches an
+omission neither can find alone, and the first version left that comparison to
+whoever remembered to run both.
+
+Nobody remembers. During dogfooding a model kept the headline of a section,
+"ALWAYS use dedicated tools", and dropped the five-row table underneath naming
+Read over `cat`, Grep over `grep`, and Glob over `find`. The record was properly
+grounded, because the headline really is in the document, so the quote check
+passed. It was also toothless, and the agent it was later served to used `find`
+and `grep` anyway.
+
+So extraction now runs the parser over the document it just read and reports
+every line the document's own structure marks as a rule that no submitted quote
+covers. It reports rather than refuses, because skipping prose is usually right
+and skipping a table of specifics usually is not, and the caller is the one who
+can tell the difference.
+
+That moved the parser from `source` into the domain package, since `source`
+imports the domain and cannot be imported back. `mecp distill` and the coverage
+check now share one implementation rather than two that could drift.
+
+## File validation is always on; only git is optional
+
+`validation.git` used to gate the whole source resolver, so with it off nothing
+was validated at all and every record read `unverified`. That silently removed
+the thing that makes activating an extracted rule without review defensible: a
+record carries its document's hash, and editing the document is supposed to mark
+it stale.
+
+Checking that a file exists and still hashes the same needs no git. Only the
+commit-ancestor policy does. So the resolver is always wired, and the flag now
+gates only the policies that shell out.
+
+Validation also accepts any path inside a configured document root, not just
+inside the workspace. A record extracted from an instruction file points at that
+file wherever it lives, and refusing to check it because the caller happens to
+be working in some other repository would defeat the purpose. The roots are the
+ones the user named, so nothing widens what is reachable.
+
+## Editing a document retires the rules that vanished from it
+
+Records are keyed on the document and the quote, so rewording a line gives it a
+new key and a new record. Without anything else, the old record stays active
+while quoting text the document no longer contains.
+
+Extraction therefore archives any record drawn from that document whose quoted
+line is no longer in it, and reports which ones. They are archived rather than
+deleted, so what the document used to say remains readable as history, and only
+records from the document being extracted are touched.
+
+## An extracted rule is checked line by line, not file by file
+
+`file_path_and_hash` compares the hash of a whole document, which is right for a
+record drawn from a single artifact and wrong for one of thirty rules drawn from
+one file. Editing any single line marked all thirty stale, and during dogfooding
+that demoted an entire document's worth of rules to informational while the
+document was being revised.
+
+Extraction therefore uses `quote_present`, which asks only whether the text a
+record was drawn from is still in its file. Whitespace and Markdown markers are
+normalized on both sides, so re-indenting a line or changing its bullet marker
+does not break the record. Editing one rule now says nothing about the others,
+which is the truth of the matter.
+
+## A rule whose line is gone is deleted, not archived
+
+Retirement removes the record instead of archiving it. The design keeps
+superseded records so a decision's history can be reconstructed, and that holds
+for records mecp is the only home for. It does not hold for a rule extracted
+from a document under version control: what the document used to say is already
+in its own history, and a second copy here only fills every listing with rules
+that no longer exist.
+
+## Universal rules are delivered once, not every turn
+
+A hook that injects a context pack on every prompt leaves a copy of that pack in
+the conversation on every prompt. With 22 of 24 records applying everywhere, a
+long session accumulated tens of thousands of tokens of the same unchanging
+rules. Loading a document once is cheaper than that, which inverts the point of
+the exercise.
+
+The scope model already draws the line. A record that applies everywhere is
+session-level and goes once, through a `SessionStart` hook. A record tied to a
+repository, a path, or a kind of work varies with the turn and is the only kind
+worth sending per prompt. `PrepareTaskRequest.ScopeFilter` expresses that, and
+`mecp hook --event session-start` uses it.
+
+Breadth is read from the record's scope rather than from its match score.
+Every record names a principal, which counts towards specificity, so a match
+score is never zero and cannot stand in for "applies everywhere".
+
+On the store as it stands this turns 23 records per turn into 22 once and 2 per
+turn.

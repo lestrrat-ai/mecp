@@ -28,7 +28,7 @@ assigns explicit_user authority on its own; use --authority when you are
 importing material you actually authored.`,
 		Flags: append(globalFlags(),
 			&cli.StringFlag{Name: "authority", Usage: "authority to assign to imported records", Value: string(mecp.AuthorityImport)},
-			&cli.StringFlag{Name: "sensitivity", Usage: "sensitivity to assign", Value: string(mecp.SensitivityProject)},
+			&cli.BoolFlag{Name: "mine", Usage: `shorthand for --authority explicit_user, for material you wrote yourself`},
 			&cli.BoolFlag{Name: "dry-run", Usage: "report what would be imported without writing"},
 		),
 		Action: runImport,
@@ -72,17 +72,17 @@ func runImport(ctx context.Context, cmd *cli.Command) error {
 // on a dry run.
 func importFiles(cmd *cli.Command, principal, path string, store func(*mecp.Record) error) error {
 	authority := mecp.Authority(cmd.String("authority"))
+	if cmd.Bool("mine") {
+		if cmd.IsSet("authority") {
+			return fmt.Errorf(`--mine and --authority contradict each other; use one`)
+		}
+		authority = mecp.AuthorityUser
+	}
 	if !authority.Valid() {
 		return fmt.Errorf(`unknown authority %q`, cmd.String("authority"))
 	}
-	sensitivity := mecp.Sensitivity(cmd.String("sensitivity"))
-	if !sensitivity.Valid() {
-		return fmt.Errorf(`unknown sensitivity %q`, cmd.String("sensitivity"))
-	}
-
 	imp := source.NewFileImporter(principal)
 	imp.DefaultAuthority = authority
-	imp.DefaultSensitivity = sensitivity
 	imp.Now = time.Now().UTC()
 
 	recs, err := imp.ImportPath(path)
@@ -102,7 +102,27 @@ func importFiles(cmd *cli.Command, principal, path string, store func(*mecp.Reco
 	}
 
 	fmt.Fprintf(os.Stderr, "%d record(s)\n", len(recs))
+	reportNonDirective(recs)
 	return nil
+}
+
+// reportNonDirective says when imported records will not act as rules. Import
+// authority is deliberately weak, but a silent import leaves the user to work
+// out for themselves why their own rules come back as background information.
+func reportNonDirective(recs []*mecp.Record) {
+	var weak int
+	for _, rec := range recs {
+		if !rec.Authority.Directive() {
+			weak++
+		}
+	}
+	if weak == 0 {
+		return
+	}
+	fmt.Fprintf(os.Stderr,
+		"mecp: %d of them carry %s authority, so agents will read them as background information rather than rules.\n"+
+			"      Re-import with --mine if you wrote this material, or set authority: in the file itself.\n",
+		weak, recs[0].Authority)
 }
 
 func importJSONL(ctx context.Context, rt *runtime, path string, dryRun bool) error {

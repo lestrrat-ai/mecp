@@ -25,6 +25,36 @@ const minPrefixLength = 4
 // excerpt, which is untrusted text and should not dominate ranking.
 const bm25Weights = `0.0, 5.0, 3.0, 1.5, 2.0, 0.5`
 
+// defaultMinScore is the absolute bm25 floor a hit must clear to be returned
+// at all, regardless of how it compares to other hits in the same result set.
+// Relevance alone cannot express this: it is normalized against the best hit
+// in the same call, so a query that matches nothing relevant still returns a
+// top hit scored a confident 1.00. In principle this is the floor that lets a
+// query the store cannot answer come back empty.
+//
+// It defaults to 0 (disabled) because bm25's magnitude is corpus-relative: it
+// comes from an inverse-document-frequency term that shrinks toward zero as a
+// corpus gets smaller, so a fixed absolute floor tuned against one store size
+// silently swallows every real match in a smaller one. This was found by
+// running the existing small-corpus unit tests against a floor of 5.5, tuned
+// with margin below the weakest genuine match in a 177-record corpus, 5.85:
+// every one of them lost its expected hit. A deployment with a large, stable corpus
+// that wants this floor anyway can opt in with sqlite.WithMinSearchScore; it
+// is a policy choice, not a mechanism the store should force on everyone.
+const defaultMinScore = 0
+
+// defaultMinRelevance is the relative floor: a hit scoring below this
+// fraction of the best hit in the same result set is dropped as noise
+// trailing behind a good answer, rather than kept just because something else
+// matched worse. Unlike defaultMinScore this is corpus-size safe, since a
+// lone hit is always relevant to itself (relevance 1.0) whatever the corpus:
+// it only ever trims a weaker hit that is genuinely far behind a better one in
+// the same call. The value leaves comfortable margin below the weakest
+// genuine match's own relative score, 0.871, measured over a 177-record
+// corpus of 28 labelled queries. It is a policy choice, not a mechanism, so
+// it is also settable via sqlite.WithMinSearchRelevance.
+const defaultMinRelevance = 0.7
+
 // SearchRecords applies the structured pre-filter and then ranks the survivors
 // lexically. Authorization happens in the same WHERE clause as the MATCH, so a
 // disallowed row never contributes to a score or a count.
@@ -88,13 +118,20 @@ func (s *Store) SearchRecords(ctx context.Context, q mecp.SearchQuery) ([]mecp.S
 
 	out := make([]mecp.ScoredRecord, 0, len(recs))
 	for i, rec := range recs {
+		if scores[i] < s.minScore {
+			continue
+		}
 		relevance := 0.5
 		if best > 0 {
 			relevance = scores[i] / best
 		}
+		if relevance < s.minRelevance {
+			continue
+		}
 		out = append(out, mecp.ScoredRecord{
 			Record:    rec,
 			Relevance: relevance,
+			RawScore:  scores[i],
 			Terms:     matchingTerms(terms, rec),
 		})
 	}
@@ -175,4 +212,5 @@ var stopWords = map[string]struct{}{
 	"on": {}, "or": {}, "that": {}, "the": {}, "their": {}, "then": {}, "there": {},
 	"these": {}, "they": {}, "this": {}, "to": {}, "was": {}, "were": {}, "what": {},
 	"when": {}, "which": {}, "why": {}, "will": {}, "with": {}, "you": {}, "your": {},
+	"can": {}, "should": {}, "use": {}, "my": {},
 }

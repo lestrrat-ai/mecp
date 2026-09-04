@@ -31,8 +31,6 @@ var migrations = []migration{
 				authority          TEXT NOT NULL,
 				status             TEXT NOT NULL,
 				confidence         REAL NOT NULL DEFAULT 1.0,
-				sensitivity        TEXT NOT NULL,
-				sensitivity_level  INTEGER NOT NULL,
 				valid_from         TEXT NOT NULL,
 				valid_until        TEXT,
 				review_after       TEXT,
@@ -45,7 +43,6 @@ var migrations = []migration{
 			)`,
 			`CREATE INDEX idx_records_status ON records(status)`,
 			`CREATE INDEX idx_records_kind ON records(kind)`,
-			`CREATE INDEX idx_records_sensitivity ON records(sensitivity_level)`,
 			`CREATE INDEX idx_records_subject ON records(normalized_subject)`,
 
 			`CREATE TABLE record_scopes (
@@ -69,7 +66,6 @@ var migrations = []migration{
 				content_hash      TEXT NOT NULL DEFAULT '',
 				exact_excerpt     TEXT NOT NULL DEFAULT '',
 				captured_at       TEXT NOT NULL,
-				sensitivity       TEXT NOT NULL DEFAULT '',
 				validation_policy TEXT NOT NULL DEFAULT ''
 			)`,
 

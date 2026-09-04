@@ -38,7 +38,6 @@ func recordAddCommand() *cli.Command {
 			&cli.StringFlag{Name: "subject", Usage: "short name for what this is about; derived from the statement when omitted"},
 			&cli.StringFlag{Name: "rationale", Usage: "why this is the case"},
 			&cli.StringFlag{Name: "authority", Usage: "one of " + joinAuthorities(), Value: string(mecp.AuthorityUser)},
-			&cli.StringFlag{Name: "sensitivity", Usage: "one of public, project, personal, restricted", Value: string(mecp.SensitivityProject)},
 			&cli.StringFlag{Name: "repository", Aliases: []string{"r"}, Usage: "scope to a repository; discovered from git when --here is given"},
 			&cli.BoolFlag{Name: "here", Usage: "scope to the repository in the current directory"},
 			&cli.StringSliceFlag{Name: "branch", Usage: "scope to a branch pattern (repeatable)"},
@@ -120,7 +119,6 @@ func runRecordAdd(ctx context.Context, cmd *cli.Command) error {
 			Conditions:     conditions,
 		},
 		Authority:        mecp.Authority(cmd.String("authority")),
-		Sensitivity:      mecp.Sensitivity(cmd.String("sensitivity")),
 		ValidationPolicy: mecp.ValidationPolicy(cmd.String("validation")),
 		ReviewAfter:      reviewAfter,
 		ValidUntil:       validUntil,
@@ -242,7 +240,7 @@ func runRecordShow(ctx context.Context, cmd *cli.Command) error {
 	defer rt.Close()
 
 	res, err := rt.svc.GetRecords(ctx, mecp.GetRecordsRequest{
-		Caller:          rt.cfg.AdminCaller(),
+		Caller:          rt.cfg.AdminCaller().WithOrigin(mecp.OriginCLI),
 		RecordIDs:       ids,
 		IncludeEvidence: true,
 	})
@@ -263,7 +261,6 @@ func runRecordShow(ctx context.Context, cmd *cli.Command) error {
 		}
 		fmt.Printf("  authority   %s\n", rec.Authority)
 		fmt.Printf("  status      %s\n", rec.Status)
-		fmt.Printf("  sensitivity %s\n", rec.Sensitivity)
 		fmt.Printf("  scope       %s\n", describeScope(rec.Scope))
 		fmt.Printf("  validation  %s (%s)\n", rec.Validation.State, rec.ValidationPolicy)
 		if rec.Validation.Reason != "" {
@@ -332,7 +329,6 @@ func runRecordSupersede(ctx context.Context, cmd *cli.Command) error {
 		Rationale:        cmd.String("rationale"),
 		Scope:            old.Scope.Clone(),
 		Authority:        old.Authority,
-		Sensitivity:      old.Sensitivity,
 		ValidationPolicy: old.ValidationPolicy,
 		Tags:             old.Tags,
 		Supersedes:       []string{oldID},

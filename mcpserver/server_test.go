@@ -1,8 +1,10 @@
 package mcpserver_test
 
 import (
+	"context"
 	"encoding/json"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,16 +21,22 @@ const heliumRepo = "https://github.com/lestrrat-go/helium"
 
 func agentCaller() mecp.Caller {
 	return mecp.Caller{
-		PrincipalID:    "local-user",
-		ClientID:       "claude-code",
-		Capabilities:   []mecp.Capability{mecp.CapPrepare, mecp.CapSearchProject, mecp.CapEvidenceProject},
-		MaxSensitivity: mecp.SensitivityProject,
+		PrincipalID:  "local-user",
+		ClientID:     "claude-code",
+		Capabilities: []mecp.Capability{mecp.CapPrepare, mecp.CapSearch, mecp.CapEvidence},
 	}
 }
 
 // connect wires a server and client over in-memory transports, which exercises
 // the real JSON-RPC encoding, schema validation, and structured-output path.
 func connect(t *testing.T, caller mecp.Caller, records ...*mecp.Record) *mcp.ClientSession {
+	t.Helper()
+	return connectAudited(t, caller, mecp.NopAudit{}, records...)
+}
+
+// connectAudited is connect with the audit trail kept, for the tests that care
+// what the call recorded.
+func connectAudited(t *testing.T, caller mecp.Caller, sink mecp.AuditSink, records ...*mecp.Record) *mcp.ClientSession {
 	t.Helper()
 
 	store, err := sqlite.Open(filepath.Join(t.TempDir(), "context.db"))
@@ -42,7 +50,7 @@ func connect(t *testing.T, caller mecp.Caller, records ...*mecp.Record) *mcp.Cli
 		require.NoError(t, store.PutRecord(t.Context(), rec))
 	}
 
-	svc, err := mecp.New(store, mecp.WithClock(mecp.FixedClock{Time: testNow}))
+	svc, err := mecp.New(store, mecp.WithClock(mecp.FixedClock{Time: testNow}), mecp.WithAuditSink(sink))
 	require.NoError(t, err)
 
 	srv, err := mcpserver.New(svc, caller)
@@ -62,13 +70,12 @@ func connect(t *testing.T, caller mecp.Caller, records ...*mecp.Record) *mcp.Cli
 
 func stylesheetConstraint() *mecp.Record {
 	return &mecp.Record{
-		ID:          "rec_stylesheet_constraint",
-		Kind:        mecp.KindConstraint,
-		Subject:     "untrusted stylesheets",
-		Statement:   "Untrusted XSLT stylesheets must never be executed during parsing.",
-		Scope:       mecp.Scope{Repository: heliumRepo},
-		Authority:   mecp.AuthorityRepository,
-		Sensitivity: mecp.SensitivityProject,
+		ID:        "rec_stylesheet_constraint",
+		Kind:      mecp.KindConstraint,
+		Subject:   "untrusted stylesheets",
+		Statement: "Untrusted XSLT stylesheets must never be executed during parsing.",
+		Scope:     mecp.Scope{Repository: heliumRepo},
+		Authority: mecp.AuthorityRepository,
 	}
 }
 
@@ -349,4 +356,91 @@ func contentText(res *mcp.CallToolResult) string {
 		}
 	}
 	return out
+}
+
+// recordingAudit keeps every event the service wrote during a tool call.
+type recordingAudit struct {
+	mu     sync.Mutex
+	events []mecp.AuditEvent
+}
+
+func (a *recordingAudit) Write(_ context.Context, ev mecp.AuditEvent) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.events = append(a.events, ev)
+	return nil
+}
+
+func (a *recordingAudit) all() []mecp.AuditEvent {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]mecp.AuditEvent(nil), a.events...)
+}
+
+func TestAuditOriginIsTheGatewaysToSet(t *testing.T) {
+	t.Run("a tool call audits as MCP even when the caller arrived without an origin", func(t *testing.T) {
+		sink := &recordingAudit{}
+		session := connectAudited(t, agentCaller(), sink, stylesheetConstraint())
+
+		res, err := session.CallTool(t.Context(), &mcp.CallToolParams{
+			Name:      mcpserver.ToolPrepareTask,
+			Arguments: map[string]any{"task": "Review the XSLT handling"},
+		})
+		require.NoError(t, err)
+		require.False(t, res.IsError, contentText(res))
+
+		events := sink.all()
+		require.Len(t, events, 1)
+		require.Equal(t, mecp.OriginMCP, events[0].Origin)
+	})
+
+	t.Run("a caller handed in as CLI is still audited as MCP", func(t *testing.T) {
+		sink := &recordingAudit{}
+		session := connectAudited(t, agentCaller().WithOrigin(mecp.OriginCLI), sink, stylesheetConstraint())
+
+		res, err := session.CallTool(t.Context(), &mcp.CallToolParams{
+			Name:      mcpserver.ToolPrepareTask,
+			Arguments: map[string]any{"task": "Review the XSLT handling"},
+		})
+		require.NoError(t, err)
+		require.False(t, res.IsError, contentText(res))
+
+		events := sink.all()
+		require.Len(t, events, 1)
+		require.Equal(t, mecp.OriginMCP, events[0].Origin)
+	})
+}
+
+func TestExtractRulesTool(t *testing.T) {
+	caller := agentCaller()
+	caller.Capabilities = append(caller.Capabilities, mecp.CapPropose)
+
+	t.Run("the tool appears with the propose capability", func(t *testing.T) {
+		session := connect(t, caller)
+		res, err := session.ListTools(t.Context(), nil)
+		require.NoError(t, err)
+
+		var found bool
+		for _, tool := range res.Tools {
+			if tool.Name == mcpserver.ToolExtractRules {
+				found = true
+			}
+		}
+		require.True(t, found)
+	})
+
+	t.Run("a rule with no quote is rejected by the schema", func(t *testing.T) {
+		session := connect(t, caller)
+		res, err := session.CallTool(t.Context(), &mcp.CallToolParams{
+			Name: mcpserver.ToolExtractRules,
+			Arguments: map[string]any{
+				"document_path": "/does/not/matter.md",
+				"rules": []map[string]any{
+					{"kind": "constraint", "statement": "Something."},
+				},
+			},
+		})
+		require.NoError(t, err)
+		require.True(t, res.IsError, "quote is required so a rule cannot be filed unchecked")
+	})
 }

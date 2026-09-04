@@ -165,11 +165,15 @@ func runSearch(ctx context.Context, cmd *cli.Command) error {
 // callerFor picks the identity a diagnostic command runs as. With no --client
 // it uses the administrative identity, which sees everything; with --client it
 // reproduces exactly what that agent profile would get.
+//
+// The identity is reproduced, but the origin is not: a run under --client
+// audits as the CLI, so reproducing what an agent sees never leaves a line that
+// reads as the agent's own call.
 func callerFor(rt *runtime, cmd *cli.Command) mecp.Caller {
 	if id := cmd.String("client"); id != "" {
-		return rt.cfg.Caller(id)
+		return rt.cfg.Caller(id).WithOrigin(mecp.OriginCLI)
 	}
-	return rt.cfg.AdminCaller()
+	return rt.cfg.AdminCaller().WithOrigin(mecp.OriginCLI)
 }
 
 func workspaceFrom(cmd *cli.Command) mecp.Workspace {

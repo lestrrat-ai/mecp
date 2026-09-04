@@ -2,7 +2,6 @@
 kind: constraint
 subject: untrusted stylesheets
 authority: repository_authoritative
-sensitivity: project
 scope:
   repository: https://github.com/example/your-project
   path_patterns: ["parser/", "xslt/"]

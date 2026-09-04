@@ -2,6 +2,7 @@ package mecp
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -24,7 +25,28 @@ type Service interface {
 	GetRecords(ctx context.Context, req GetRecordsRequest) (*RecordResult, error)
 	// ProposeRecord files an inactive proposal for user review.
 	ProposeRecord(ctx context.Context, req ProposeRecordRequest) (*ProposalResult, error)
+	// ExtractRules turns rules read out of an instruction document into
+	// pending proposals, checking each quote against the document itself.
+	ExtractRules(ctx context.Context, req ExtractRulesRequest) (*ExtractRulesResult, error)
 }
+
+// ScopeFilter narrows a context pack by how widely its records apply.
+//
+// It exists because a caller that injects context on every turn would otherwise
+// resend the same universal rules forever, and each copy stays in the
+// conversation. Delivering those once and then only what is specific to the
+// work keeps the repetition out.
+type ScopeFilter string
+
+const (
+	// ScopeFilterAll returns every applicable record.
+	ScopeFilterAll ScopeFilter = ""
+	// ScopeFilterGlobalOnly returns only records that apply everywhere, which
+	// is what a caller wants once at the start of a session.
+	ScopeFilterGlobalOnly ScopeFilter = "global_only"
+	// ScopeFilterScopedOnly omits those, for a caller that already has them.
+	ScopeFilterScopedOnly ScopeFilter = "scoped_only"
+)
 
 // PrepareTaskRequest asks for the context that matters for one task.
 type PrepareTaskRequest struct {
@@ -35,6 +57,8 @@ type PrepareTaskRequest struct {
 	Conditions               map[string]string
 	TokenBudget              int
 	IncludeEvidenceSummaries bool
+	// ScopeFilter narrows the pack to records of a given breadth.
+	ScopeFilter ScopeFilter
 }
 
 // ContextPack is the bounded result of preparing context for a task.
@@ -98,9 +122,9 @@ type GetRecordsRequest struct {
 }
 
 // SourceView is a source as disclosed to a caller. Excerpt carries untrusted
-// source text and is empty when the caller lacks the evidence capability for
-// the record's sensitivity; Redacted then says so explicitly rather than
-// letting the absence look like "no evidence exists".
+// source text and is empty when the caller lacks the evidence capability;
+// Redacted then says so explicitly rather than letting the absence look like
+// "no evidence exists".
 type SourceView struct {
 	SourceID    string     `json:"source_id"`
 	Type        SourceType `json:"type"`
@@ -123,7 +147,6 @@ type RecordDetail struct {
 	Rationale        string           `json:"rationale,omitempty"`
 	Authority        Authority        `json:"authority"`
 	Status           RecordStatus     `json:"status"`
-	Sensitivity      Sensitivity      `json:"sensitivity"`
 	Scope            Scope            `json:"scope"`
 	Tags             []string         `json:"tags,omitempty"`
 	Confidence       float64          `json:"confidence"`
@@ -179,15 +202,17 @@ const (
 )
 
 type service struct {
-	store         Store
-	clock         Clock
-	ranker        Ranker
-	packer        Packer
-	validator     Validator
-	audit         AuditSink
-	contextTTL    time.Duration
-	maxCandidates int
-	aliases       map[string]string
+	store             Store
+	clock             Clock
+	ranker            Ranker
+	packer            Packer
+	validator         Validator
+	audit             AuditSink
+	documents         DocumentReader
+	documentAuthority Authority
+	contextTTL        time.Duration
+	maxCandidates     int
+	aliases           map[string]string
 
 	mu      sync.Mutex
 	handles map[string]*contextHandle
@@ -245,6 +270,10 @@ func New(store Store, options ...ServiceOption) (Service, error) {
 			validationTTL = option.MustGet[time.Duration](opt)
 		case identAuditSink:
 			svc.audit = option.MustGet[AuditSink](opt)
+		case identDocumentReader:
+			svc.documents = option.MustGet[DocumentReader](opt)
+		case identDocumentAuthority:
+			svc.documentAuthority = option.MustGet[Authority](opt)
 		case identContextTTL:
 			svc.contextTTL = option.MustGet[time.Duration](opt)
 		case identMaxCandidates:
@@ -271,6 +300,11 @@ func New(store Store, options ...ServiceOption) (Service, error) {
 		}
 	}
 
+	if svc.documentAuthority == "" {
+		// Document roots are named deliberately in configuration, so what they
+		// hold is the user's own writing rather than something found.
+		svc.documentAuthority = AuthorityUser
+	}
 	if svc.maxCandidates <= 0 {
 		svc.maxCandidates = defaultMaxCandidates
 	}
@@ -358,6 +392,7 @@ type collectRequest struct {
 	Conditions   map[string]string
 	Kinds        []RecordKind
 	IncludeStale bool
+	ScopeFilter  ScopeFilter
 	// IncludeMandatory pulls in directly-scoped directive records even when
 	// they do not match the query text. Task preparation needs this; a targeted
 	// follow-up search does not.
@@ -368,7 +403,6 @@ type collectRequest struct {
 // shared by PrepareTask and Search.
 func (s *service) collect(ctx context.Context, req collectRequest) ([]*Candidate, []Warning, error) {
 	now := s.clock.Now()
-	ceiling := req.Caller.SensitivityCeiling()
 
 	statuses := []RecordStatus{StatusActive, StatusDisputed, StatusStale}
 	if req.IncludeStale {
@@ -377,7 +411,6 @@ func (s *service) collect(ctx context.Context, req collectRequest) ([]*Candidate
 
 	base := RecordQuery{
 		PrincipalID:          req.Caller.PrincipalID,
-		MaxSensitivity:       ceiling,
 		Kinds:                req.Kinds,
 		Statuses:             statuses,
 		At:                   now,
@@ -426,6 +459,20 @@ func (s *service) collect(ctx context.Context, req collectRequest) ([]*Candidate
 		if !match.Matched {
 			continue
 		}
+		// Breadth is a property of the record's scope, not of the match. Every
+		// record names a principal, which scores on the user dimension, so
+		// specificity is never zero and cannot stand in for "applies
+		// everywhere".
+		switch req.ScopeFilter {
+		case ScopeFilterGlobalOnly:
+			if !c.Record.Scope.Global() {
+				continue
+			}
+		case ScopeFilterScopedOnly:
+			if c.Record.Scope.Global() {
+				continue
+			}
+		}
 		c.Scope = match
 		applicable = append(applicable, c)
 	}
@@ -433,6 +480,14 @@ func (s *service) collect(ctx context.Context, req collectRequest) ([]*Candidate
 	warnings, err := s.annotate(ctx, applicable, req, now)
 	if err != nil {
 		return nil, nil, err
+	}
+
+	unknown, err := s.unknownRepositoryWarning(ctx, req.Repository)
+	if err != nil {
+		return nil, nil, err
+	}
+	if unknown != nil {
+		warnings = append(warnings, *unknown)
 	}
 
 	s.ranker.Rank(RankRequest{
@@ -443,6 +498,39 @@ func (s *service) collect(ctx context.Context, req collectRequest) ([]*Candidate
 	}, applicable)
 
 	return applicable, warnings, nil
+}
+
+// unknownRepositoryWarning reports a repository the store has never seen. An
+// empty result is otherwise indistinguishable from having nothing stored, which
+// hides the most likely cause: the caller named the repository differently from
+// however the records were written.
+//
+// Nothing is reported when no record is scoped to any repository, because then
+// the store genuinely has nothing to say and the caller is not being misled.
+func (s *service) unknownRepositoryWarning(ctx context.Context, repository string) (*Warning, error) {
+	if repository == "" {
+		return nil, nil
+	}
+	known, err := s.store.KnownRepositories(ctx)
+	if err != nil {
+		return nil, wrapf(CodeStorage, err, "cannot list known repositories")
+	}
+	if len(known) == 0 || slices.Contains(known, repository) {
+		return nil, nil
+	}
+	return &Warning{
+		Code: WarnUnknownRepository,
+		Message: fmt.Sprintf(
+			"no record is scoped to %s, though %d other repositor%s stored; check that the repository is named the way the records were written",
+			repository, len(known), pluralVerb(len(known))),
+	}, nil
+}
+
+func pluralVerb(n int) string {
+	if n == 1 {
+		return "y is"
+	}
+	return "ies are"
 }
 
 // annotate fills in supersession, freshness, and effect for every candidate,
@@ -621,24 +709,18 @@ func (s *service) takeHandle(caller Caller, id string) (*contextHandle, error) {
 	return h, nil
 }
 
-func (s *service) writeAudit(ctx context.Context, ev AuditEvent, start time.Time) {
+// writeAudit stamps the parts of an event that every call site would otherwise
+// have to repeat, and records it. The caller identity is copied here rather
+// than at each site so that a new operation cannot ship an event that is
+// missing who asked or which interface they asked through.
+func (s *service) writeAudit(ctx context.Context, caller Caller, ev AuditEvent, start time.Time) {
 	ev.At = s.clock.Now()
 	ev.LatencyMS = time.Since(start).Milliseconds()
+	ev.PrincipalID = caller.PrincipalID
+	ev.ClientID = caller.ClientID
+	ev.Origin = caller.Origin
+	ev.SessionID = caller.SessionID
 	// An audit failure must not fail the user's call; it is recorded locally
 	// and best-effort by design.
 	_ = s.audit.Write(ctx, ev)
-}
-
-func sensitivityClasses(cands []*Candidate) []Sensitivity {
-	seen := make(map[Sensitivity]struct{}, len(cands))
-	for _, c := range cands {
-		seen[c.Record.Sensitivity] = struct{}{}
-	}
-	out := make([]Sensitivity, 0, len(seen))
-	for _, s := range AllSensitivities {
-		if _, ok := seen[s]; ok {
-			out = append(out, s)
-		}
-	}
-	return out
 }

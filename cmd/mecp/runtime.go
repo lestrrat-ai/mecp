@@ -46,7 +46,17 @@ func openRuntime(ctx context.Context, cmd *cli.Command, readOnly bool) (*runtime
 		return nil, err
 	}
 
-	store, err := sqlite.Open(cfg.Database, sqlite.WithReadOnly(readOnly))
+	// A nil pointer means the key was absent, which keeps the store default.
+	// An explicit zero is a request to turn the floor off, so it is passed
+	// through rather than treated as "unset".
+	storeOptions := []sqlite.Option{sqlite.WithReadOnly(readOnly)}
+	if v := cfg.Defaults.MinSearchScore; v != nil {
+		storeOptions = append(storeOptions, sqlite.WithMinSearchScore(*v))
+	}
+	if v := cfg.Defaults.MinSearchRelevance; v != nil {
+		storeOptions = append(storeOptions, sqlite.WithMinSearchRelevance(*v))
+	}
+	store, err := sqlite.Open(cfg.Database, storeOptions...)
 	if err != nil {
 		return nil, err
 	}
@@ -65,8 +75,15 @@ func openRuntime(ctx context.Context, cmd *cli.Command, readOnly bool) (*runtime
 	if len(cfg.RepositoryAliases) > 0 {
 		options = append(options, mecp.WithRepositoryAliases(cfg.RepositoryAliases))
 	}
-	if cfg.Validation.Git {
-		options = append(options, mecp.WithSourceResolver(source.NewGitResolver()))
+	// The resolver is always wired. Its file and hash checks need no git, and
+	// the commit-ancestor policy reports "unverified" rather than failing when
+	// git is not wanted.
+	options = append(options, mecp.WithSourceResolver(source.NewGitResolver(
+		source.WithGitEnabled(cfg.Validation.Git),
+		source.WithAllowedRoots(cfg.DocumentRoots),
+	)))
+	if len(cfg.DocumentRoots) > 0 {
+		options = append(options, mecp.WithDocumentReader(source.NewDocumentReader(cfg.DocumentRoots)))
 	}
 
 	sink, err := auditSink(cfg, store, readOnly)
@@ -107,14 +124,19 @@ func auditSink(cfg *config.Config, store *sqlite.Store, readOnly bool) (mecp.Aud
 	case "sqlite":
 		return sqlite.NewAuditSink(store), nil
 	case "jsonl":
-		path := cfg.AuditLog
-		if path == "" {
-			path = config.DefaultAuditPath()
-		}
-		return mecp.NewJSONLAudit(path)
+		return mecp.NewJSONLAudit(auditLogPath(cfg))
 	default:
 		return nil, fmt.Errorf(`unknown audit sink %q`, cfg.Audit)
 	}
+}
+
+// auditLogPath is where the JSONL sink writes, which is also where anything
+// reading that sink has to look.
+func auditLogPath(cfg *config.Config) string {
+	if cfg.AuditLog != "" {
+		return cfg.AuditLog
+	}
+	return config.DefaultAuditPath()
 }
 
 // globalFlags are accepted by every command.

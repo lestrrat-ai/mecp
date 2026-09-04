@@ -141,53 +141,22 @@ func (s RecordStatus) Valid() bool { return slices.Contains(AllRecordStatuses, s
 // never appear as current instruction.
 func (s RecordStatus) Guidance() bool { return s == StatusActive }
 
-// Sensitivity is the disclosure class of a record. A client profile declares a
-// ceiling, and records above it are removed before retrieval rather than
-// filtered out of the results.
-type Sensitivity string
-
-const (
-	SensitivityPublic     Sensitivity = "public"
-	SensitivityProject    Sensitivity = "project"
-	SensitivityPersonal   Sensitivity = "personal"
-	SensitivityRestricted Sensitivity = "restricted"
-)
-
-// AllSensitivities lists every valid Sensitivity from least to most sensitive.
-var AllSensitivities = []Sensitivity{
-	SensitivityPublic,
-	SensitivityProject,
-	SensitivityPersonal,
-	SensitivityRestricted,
-}
-
-func (s Sensitivity) Valid() bool { return slices.Contains(AllSensitivities, s) }
-
-// Level returns the ordinal of a sensitivity, where larger is more sensitive.
-// An unknown value returns the maximum level so that unrecognized data fails
-// closed instead of leaking.
-func (s Sensitivity) Level() int {
-	idx := slices.Index(AllSensitivities, s)
-	if idx < 0 {
-		return len(AllSensitivities)
-	}
-	return idx
-}
-
-// AtMost reports whether s may be disclosed to a client whose ceiling is limit.
-func (s Sensitivity) AtMost(limit Sensitivity) bool { return s.Level() <= limit.Level() }
-
 // ValidationPolicy selects how a record's continued truth is checked. Policies
 // that need to touch the filesystem or Git are delegated to a SourceResolver so
 // that the domain package stays free of I/O.
 type ValidationPolicy string
 
 const (
-	ValidateNone         ValidationPolicy = "none"
-	ValidateEvidence     ValidationPolicy = "evidence_exists"
-	ValidateContentHash  ValidationPolicy = "content_hash_matches"
-	ValidateGitAncestor  ValidationPolicy = "git_revision_ancestor"
-	ValidateFileAndHash  ValidationPolicy = "file_path_and_hash"
+	ValidateNone        ValidationPolicy = "none"
+	ValidateEvidence    ValidationPolicy = "evidence_exists"
+	ValidateContentHash ValidationPolicy = "content_hash_matches"
+	ValidateGitAncestor ValidationPolicy = "git_revision_ancestor"
+	ValidateFileAndHash ValidationPolicy = "file_path_and_hash"
+	// ValidateQuotePresent keeps a record fresh while the exact text it was
+	// drawn from is still in its source file. It suits a rule extracted from a
+	// document, where hashing the whole file would mark every rule stale
+	// whenever any one of them was edited.
+	ValidateQuotePresent ValidationPolicy = "quote_present"
 	ValidateReviewAfter  ValidationPolicy = "review_after"
 	ValidateManualReview ValidationPolicy = "manual"
 )
@@ -199,6 +168,7 @@ var AllValidationPolicies = []ValidationPolicy{
 	ValidateContentHash,
 	ValidateGitAncestor,
 	ValidateFileAndHash,
+	ValidateQuotePresent,
 	ValidateReviewAfter,
 	ValidateManualReview,
 }
@@ -277,7 +247,6 @@ type Source struct {
 	ContentHash      string           `json:"content_hash,omitempty" yaml:"content_hash,omitempty"`
 	ExactExcerpt     string           `json:"exact_excerpt,omitempty" yaml:"exact_excerpt,omitempty"`
 	CapturedAt       time.Time        `json:"captured_at" yaml:"captured_at"`
-	Sensitivity      Sensitivity      `json:"sensitivity,omitempty" yaml:"sensitivity,omitempty"`
 	ValidationPolicy ValidationPolicy `json:"validation_policy,omitempty" yaml:"validation_policy,omitempty"`
 }
 
@@ -293,7 +262,6 @@ type Record struct {
 	Authority        Authority        `json:"authority" yaml:"authority"`
 	Status           RecordStatus     `json:"status" yaml:"status"`
 	Confidence       float64          `json:"confidence" yaml:"confidence"`
-	Sensitivity      Sensitivity      `json:"sensitivity" yaml:"sensitivity"`
 	ValidFrom        time.Time        `json:"valid_from" yaml:"valid_from"`
 	ValidUntil       *time.Time       `json:"valid_until,omitempty" yaml:"valid_until,omitempty"`
 	ReviewAfter      *time.Time       `json:"review_after,omitempty" yaml:"review_after,omitempty"`
@@ -391,9 +359,6 @@ func (r *Record) Normalize(now time.Time) {
 	if r.Status == "" {
 		r.Status = StatusActive
 	}
-	if r.Sensitivity == "" {
-		r.Sensitivity = SensitivityProject
-	}
 	if r.ValidationPolicy == "" {
 		r.ValidationPolicy = ValidateNone
 	}
@@ -451,9 +416,6 @@ func (r *Record) Validate() error {
 	}
 	if !r.Status.Valid() {
 		return fmt.Errorf(`record %s: invalid status %q`, r.ID, r.Status)
-	}
-	if !r.Sensitivity.Valid() {
-		return fmt.Errorf(`record %s: invalid sensitivity %q`, r.ID, r.Sensitivity)
 	}
 	if !r.ValidationPolicy.Valid() {
 		return fmt.Errorf(`record %s: invalid validation policy %q`, r.ID, r.ValidationPolicy)

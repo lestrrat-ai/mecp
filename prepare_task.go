@@ -37,11 +37,9 @@ func (s *service) PrepareTask(ctx context.Context, req PrepareTaskRequest) (*Con
 
 	scope, warnings, err := s.resolveScope(req.Caller, req.Workspace, taskKind)
 	if err != nil {
-		s.writeAudit(ctx, AuditEvent{
-			PrincipalID: req.Caller.PrincipalID,
-			ClientID:    req.Caller.ClientID,
-			Operation:   "prepare_task",
-			ErrorCode:   CodeOf(err),
+		s.writeAudit(ctx, req.Caller, AuditEvent{
+			Operation: "prepare_task",
+			ErrorCode: CodeOf(err),
 		}, start)
 		return nil, err
 	}
@@ -53,6 +51,7 @@ func (s *service) PrepareTask(ctx context.Context, req PrepareTaskRequest) (*Con
 		Repository:       scope.Repository,
 		TaskKind:         taskKind,
 		Conditions:       req.Conditions,
+		ScopeFilter:      req.ScopeFilter,
 		IncludeMandatory: true,
 	})
 	if err != nil {
@@ -102,16 +101,13 @@ func (s *service) PrepareTask(ctx context.Context, req PrepareTaskRequest) (*Con
 		ExpiresAt:   pack.ExpiresAt,
 	})
 
-	s.writeAudit(ctx, AuditEvent{
-		PrincipalID:        req.Caller.PrincipalID,
-		ClientID:           req.Caller.ClientID,
-		Operation:          "prepare_task",
-		Scope:              scope,
-		RecordIDs:          itemRecordIDs(items),
-		SensitivityClasses: sensitivityClasses(cands),
-		WarningCodes:       warningCodes(warnings),
-		Truncated:          budgetReport.Truncated,
-		ResultCount:        len(items),
+	s.writeAudit(ctx, req.Caller, AuditEvent{
+		Operation:    "prepare_task",
+		Scope:        scope,
+		RecordIDs:    itemRecordIDs(items),
+		WarningCodes: warningCodes(warnings),
+		Truncated:    budgetReport.Truncated,
+		ResultCount:  len(items),
 	}, start)
 
 	return pack, nil

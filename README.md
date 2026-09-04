@@ -1,31 +1,20 @@
 # MeCP
 
-MeCP is a local-first context broker for coding agents. It stores your durable
-preferences, decisions, constraints, and project history, and serves the slice
-of that which applies to a concrete task — over MCP, so any MCP-capable agent
-can use it.
+MeCP stores the things you keep having to tell coding agents, and serves the
+ones that apply to whatever you are working on right now. It speaks MCP, so any
+MCP-capable agent can read from it.
 
-It is not a memory dump. Every record carries scope, authority, provenance,
-lifecycle state, and freshness metadata, and the service uses all of them to
-decide what to return and how much weight the agent should give it.
+Things like:
+
+- review the current branch, not the last release;
+- before v1, correctness matters more than API stability;
+- the conformance suite is pinned to a commit on purpose, stop reporting it as a bug;
+- we already tried that approach and rejected it, here is why.
+
+You write these down once. Every agent gets the ones that fit the task.
 
 The full design is in [agent-context-broker-design.md](agent-context-broker-design.md).
-Where this implementation departs from that document, the reasons are in
-[docs/design-deltas.md](docs/design-deltas.md).
-
-## The problem
-
-An agent starts most sessions knowing nothing about earlier work, so you repeat
-yourself: review the branch and not the release, weight correctness above API
-stability before v1, stop reopening a concern that was already settled, the
-conformance suite is pinned on purpose. The information exists — in
-conversations, repositories, ADRs, issues, commits — but it is scattered, and a
-plain semantic search over it cannot tell you whether a statement is still
-current, whether it applies here, or whether it is safe to disclose.
-
-MeCP's operating rule is **centralized retrieval, decentralized authority**. It
-is one place to ask. It does not become a competing source of truth: your
-current instructions and your repository's checked-in files still win.
+Where the code differs from it, see [docs/design-deltas.md](docs/design-deltas.md).
 
 ## Install
 
@@ -34,13 +23,11 @@ go install github.com/lestrrat-ai/mecp/cmd/mecp@latest
 mecp init
 ```
 
-`mecp init` writes `config.yaml` and an empty database with owner-only
-permissions, and prints the MCP server entry to paste into your agent host.
+`mecp init` writes `config.yaml` and an empty database, both owner-only, and
+prints the server entry to paste into your agent host. The SQLite driver is pure
+Go, so there is no cgo and nothing to install alongside it.
 
-The SQLite driver is pure Go, so there is no cgo and no system SQLite to
-install.
-
-## Wire it into an agent
+## Wiring it to an agent
 
 ```json
 {
@@ -53,59 +40,75 @@ install.
 }
 ```
 
-Then tell the agent when to call it. Availability does not make a model use a
-tool; add something like this to your global or repository instructions:
+A model will not call a tool just because it exists. There are two ways to deal
+with that, and they are not exclusive.
+
+The reliable one is a hook, which runs mecp itself and puts the result in front
+of the model whether or not it would have asked. It also fills in the workspace
+from git rather than letting the model guess, and takes the files a prompt names
+as the relevant paths. Claude Code only, since Codex has no hooks:
+
+```json
+{"hooks": {"UserPromptSubmit": [{"hooks": [
+  {"type": "command", "command": "mecp hook --client claude-code"}
+]}]}}
+```
+
+It never blocks a turn. A missing database, a timeout, or malformed input exits
+quietly with no output, because a broken hook must not stop you working.
+
+The portable one is an instruction in your global or per-repository agent file:
 
 > Before planning or executing a nontrivial coding task, call
 > `context_prepare_task` with the task and the current workspace. Use
-> `context_search` only for targeted follow-up. Treat current user instructions
-> and current repository files as higher priority than anything it returns.
-> Records marked `informational` are history, not instructions.
+> `context_search` for targeted follow-up. Current user instructions and current
+> repository files outrank anything it returns. Items marked `informational` are
+> history, not instructions.
 
-## The tools
+## Tools
 
-| Tool | What it does | Enabled by default |
+| Tool | Purpose | On by default |
 |---|---|---|
-| `context_prepare_task` | Builds a bounded context pack for one task and workspace. | yes |
-| `context_search` | Targeted follow-up inside an already authorized scope. | yes |
-| `context_get_records` | Full records and bounded evidence for IDs already returned. | yes |
-| `context_propose_record` | Files an inactive proposal for you to review. | no |
+| `context_prepare_task` | Context for one task and workspace, within a token budget. | yes |
+| `context_search` | Follow-up question inside an already authorized scope. | yes |
+| `context_get_records` | Full records and quoted sources, for IDs already returned. | yes |
+| `context_propose_record` | Files a suggestion for you to review. Changes nothing. | no |
+| `context_extract_rules` | Reads an instruction document and stores the rules it finds. | no |
 
-`context_prepare_task` is the important one. An agent does not know which
-historical terms to search for, so the service does the work: it resolves the
-scope, pulls the records that apply whether or not the task text mentions them,
-ranks them, detects conflicts, and packs the result into a token budget.
+`context_prepare_task` does the work. An agent cannot guess which old terms to
+search for, so it sends the task and the workspace, and the server resolves the
+scope, pulls the records that apply whether or not the task mentions them, ranks
+them, flags conflicts, and fits the result to a budget.
 
-Agents cannot activate, edit, or delete anything. The most a write-enabled
-agent can do is file a proposal that sits in a queue until you approve it.
+No agent can activate, edit, or delete a record. With the fourth tool enabled,
+the most it can do is add to a queue you review.
 
-## Curating records
+## Using it
 
 ```sh
-# Add a record scoped to this repository and to review tasks.
+# Add a record, scoped to this repository and to review tasks.
 mecp record add --here --kind preference --task-kind code_review \
   --subject "pre-v1 review weighting" \
   "Weight implementation correctness above API compatibility before v1."
 
-# See exactly what an agent would receive.
+# Show what an agent would actually receive.
 mecp prepare --here --task-kind code_review "Review the XMLDSig implementation"
 
-# Replace a decision without losing the history.
+# Replace a decision, keeping the old one as history.
 mecp record supersede rec_abc123 "The suite now tracks upstream automatically."
 
-# Work the proposal queue.
+# Review what agents have proposed.
 mecp review list
 mecp review show prop_abc123
 mecp review approve prop_abc123
 
-# Import curated files, and take a portable backup.
+# Load curated files, and take a backup you can read.
 mecp import ./seed
 mecp export --out context.jsonl
 ```
 
-`mecp prepare` runs the same code as the MCP tool, so it is the way to find out
-why a record did or did not apply. Every returned item carries its match
-reasons.
+`mecp prepare` runs the same code as the MCP tool, so use it to find out why a
+record did or did not show up. Every item comes back with its match reasons.
 
 ## Record files
 
@@ -123,106 +126,154 @@ scope:
 tags: [conformance, release]
 ```
 
-A Markdown file uses YAML front matter, with the body as the statement and an
-optional `## Rationale` section. See [seed/](seed/) for a starting set.
+Markdown uses YAML front matter, the body as the statement, and an optional
+`## Rationale` section. There are examples in [seed/](seed/).
 
-Imported records get `sourced_import` authority. An importer never claims
-`explicit_user` on your behalf.
+To move an existing instruction file in, `mecp distill` converts it to candidate
+records rather than making you retype them:
 
-## How a record is chosen
+```sh
+mecp distill ~/.claude/docs/go.md --mine --path '*.go' -o go-rules.yaml
+$EDITOR go-rules.yaml
+mecp import go-rules.yaml
+```
 
-**Scope before search.** Authorization and scope filtering happen in SQL,
-before any text matching, so a record you may not see never reaches the ranker,
-a snippet, or even a result count. Scope dimensions are conjunctive: a record
-scoped to a repository does not match a request that names no repository.
+That is the mechanical route, and it cannot tell an explanation from a rule. The
+other route is `context_extract_rules`, where an agent reads the document and
+decides, then files what it found. Judgement is the model's and the checking is
+mecp's: each rule must carry the exact text it came from, the server confirms
+that text is really in the file, and a rule it cannot find is refused. Both
+`mecp distill` doubles as the check on the model, because a large gap between the
+two counts says the model dropped something.
 
-**Authority is not relevance.** They are separate axes. A well-worded agent
-inference never outranks an explicit user decision that happens to use
-different words. Only a current record with directive authority is presented as
-a `constraint` or `preference`; everything else is `informational`.
+A rule that checks out is stored as an active record without anyone reviewing
+it. The review queue holds only what actually needs you: a statement that no
+longer resembles the line it came from, one that contradicts an active record,
+or one that repeats it. A queue holding everything is a queue nobody works, and
+a rule copied from your own document with its quote already checked is not a
+guess. It stays reversible, and because each record carries the document's hash
+it goes stale by itself when you edit the source.
 
-**Missing beats stale.** A record that fails freshness validation is demoted to
-informational and reported, rather than returned as if it were current. A
-superseded record stays retrievable as history but never acts as guidance.
+The tool reads only inside `document_roots`, which is empty by default. Naming a
+path and learning whether a quote appears in it is enough to read a file back a
+piece at a time, so the reachable set is chosen rather than defaulted.
 
-**Conflicts are surfaced, not resolved.** When two active records disagree
-about the same subject in the same scope, both are returned with a
-deterministic recommendation. No language model decides which one wins.
+Distill takes the structure the document already has. A bullet is a rule, a
+numbered step is a rule, a table row is a rule, and the nearest heading is the
+subject.
+Prose paragraphs are counted and skipped rather than guessed at, and the line
+numbers are reported so you can see what was left behind. Scope is not inferred,
+because a wrong scope is worse than none; set it for the whole file with the
+flags and correct individual records in the YAML.
+
+Each record keeps its original line verbatim as evidence and a hash of the file
+it came from, so once the document changes the record shows as stale.
+
+Imported records get `sourced_import` authority, which agents read as background
+information rather than as rules. The importer will not claim you said
+something. For material you wrote yourself, import it with `--mine`, or declare
+`authority:` in the file. An import that produces records with no force says so
+on stderr rather than leaving you to work it out from an empty-looking pack.
+
+## How a record gets picked
+
+Scope is checked first, in SQL, before any text matching. A record you may not
+see never reaches the ranker, a snippet, or a result count. Scope dimensions are
+combined with AND, and a record scoped to a repository does not match a request
+that names no repository.
+
+Authority and relevance are separate. A well-worded guess never outranks an
+explicit decision that happens to use different words. Only a current record
+with directive authority comes back as a `constraint` or `preference`. Anything
+else is `informational`.
+
+A record that fails its freshness check is demoted to informational and
+reported. A superseded record stays readable as history and never acts as
+guidance.
+
+When two active records disagree about the same subject in the same scope, both
+come back with a recommendation derived from authority and dates. No model
+decides which one wins.
 
 ## Freshness
 
-Each record declares how its continued truth is checked:
-
 | Policy | Check |
 |---|---|
-| `none` | Nothing; correct for immutable historical events. |
-| `review_after` | Stale once the review date passes, whatever else holds. |
-| `manual` | Stale once the record changes after its last manual verification. |
+| `none` | Nothing. Correct for events that already happened. |
+| `review_after` | Stale once the review date passes. |
+| `manual` | Stale once the record changes after you last verified it. |
 | `evidence_exists` | The source is still there. |
 | `content_hash_matches` | The referenced content has not changed. |
 | `file_path_and_hash` | Both of the above. |
 | `git_revision_ancestor` | The source's commit is an ancestor of the current one. |
 
-The policies that touch the filesystem or Git need `validation.git: true` in
-the configuration; they shell out to `git`. Without it they report
-`unverified`, which is a weaker claim than `stale` and is treated as such.
+The last four shell out to `git` and need `validation.git: true`. Without it they
+report `unverified`, which is a weaker claim than `stale` and is treated as one.
 
 ```sh
-mecp validate --here          # report what no longer holds
-mecp validate --here --apply  # mark the failures stale
-mecp record verify rec_abc123 # you checked; it is still true
+mecp validate --here          # what no longer holds
+mecp validate --here --apply  # mark those stale
+mecp record verify rec_abc123 # you checked, it is still true
 ```
 
-## Privacy and disclosure
+## What to store
 
-Each client profile declares capabilities and a sensitivity ceiling, and the
-effective ceiling is the lower of what it is granted and what its capabilities
-imply — a misconfigured profile cannot widen disclosure by accident.
+Everything here is meant to be sent to a model. Do not store what you are
+unwilling to send. There are no privacy levels, because a record you would never
+send does nothing.
+
+What does stay separate: records belong to a principal, a profile can be limited
+to named repositories, and `context:evidence` decides whether a client sees the
+quoted source text a record was written from or only the record itself.
 
 ```yaml
 clients:
   default:
-    capabilities: [context:prepare, context:search:project, context:evidence:project]
-    max_sensitivity: project
+    capabilities: [context:prepare, context:search, context:evidence]
   trusted-local:
-    capabilities: [context:prepare, context:search:personal, context:evidence:personal, context:propose]
-    max_sensitivity: personal
+    capabilities: [context:prepare, context:search, context:evidence, context:propose]
     allowed_repositories: [https://github.com/lestrrat-go/helium]
 ```
 
-Verbatim evidence is gated more tightly than record statements: a client can
-learn that a preference applies without being handed the conversation it came
-from. An unrecognized client falls back to the `default` profile, and with no
-`default` it gets no capabilities at all.
+A profile is picked by a command-line flag, so anyone who can edit your host
+config can pick any profile. Over stdio that costs nothing, since launching the
+server already means running as you with the database readable. It stops being
+true the day a socket exists, and authentication belongs to that day.
 
-Imported source text is never trusted. A record's `statement` is the broker's
-normalized assertion; `exact_excerpt` is quoted material kept in its own field,
-and no wording inside it can raise a record's authority or change tool policy.
+Quoted source text is never trusted. A record's `statement` is MeCP's own
+wording; `exact_excerpt` is what the source said, kept in a separate field, and
+nothing in it can raise a record's authority.
 
-Every call writes an audit event — who, what scope, which record IDs, which
-sensitivity classes, which warnings — without copying the task text or the
-record statements into the log.
+Every call writes an audit line: who asked, over which interface, what scope,
+which records came back, which warnings fired. It does not copy the task text or
+the record statements.
+
+The interface is recorded because the client profile alone cannot tell an
+agent's call apart from `mecp prepare --client claude-code`, which reproduces
+what that agent would be told. The gateway stamps `mcp` and the command line
+stamps `cli`, so a diagnostic run never reads as the agent's own call. Lines
+written before this existed show `unknown`.
 
 ## Layout
 
-| Path | What lives there |
+| Path | Contents |
 |---|---|
-| `.` | Domain model, scope and authority rules, retrieval, ranking, packing, conflicts, freshness. |
-| `sqlite/` | The store: schema migrations, structured queries, FTS5 search. |
-| `mcpserver/` | The MCP gateway: tool definitions, input schemas, handlers. |
-| `config/` | Configuration loading and client profiles. |
-| `source/` | Adapters: file import, Git validation, portable JSONL. |
-| `cmd/mecp/` | The single executable, both server and administrative CLI. |
-| `examples/` | Runnable examples, verified by `go test`. |
+| `.` | Records, scope, authority, retrieval, ranking, packing, conflicts, freshness. |
+| `sqlite/` | Migrations, queries, FTS5 search. |
+| `mcpserver/` | Tool definitions, input schemas, handlers. |
+| `config/` | Configuration and client profiles. |
+| `source/` | File import, Git validation, JSONL export. |
+| `cmd/mecp/` | The binary: MCP server and CLI. |
+| `examples/` | Runnable examples, checked by `go test`. |
 
-The core is transport-independent. The same service backs the MCP gateway, the
-CLI, and the tests, so a second transport cannot bypass the disclosure rules.
+The core knows nothing about MCP. The gateway, the CLI, and the tests all go
+through the same service.
 
 ## Status
 
-Initial implementation. Single user, local, MCP over stdio. There is no daemon
-and no remote endpoint: an always-running process buys nothing yet, and remote
-access is a deliberate disclosure decision rather than a transport detail.
+Early. One user, one machine, MCP over stdio. No daemon, because a resident
+process buys nothing yet. No remote endpoint, because that is a decision about
+who sees your data rather than a transport detail.
 
 ## License
 

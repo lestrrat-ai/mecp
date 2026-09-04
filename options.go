@@ -31,6 +31,8 @@ type identValidator struct{}
 type identSourceResolver struct{}
 type identValidationTTL struct{}
 type identAuditSink struct{}
+type identDocumentReader struct{}
+type identDocumentAuthority struct{}
 type identContextTTL struct{}
 type identMaxCandidates struct{}
 type identRepositoryAliases struct{}
@@ -63,6 +65,20 @@ func WithValidationTTL(d time.Duration) ServiceOption {
 
 // WithAuditSink records one audit event per call.
 func WithAuditSink(a AuditSink) ServiceOption { return newServiceOption(identAuditSink{}, a) }
+
+// WithDocumentAuthority sets what records extracted from an instruction
+// document claim. It defaults to explicit_user, because a document root is
+// named deliberately and holds the user's own instructions.
+func WithDocumentAuthority(a Authority) ServiceOption {
+	return newServiceOption(identDocumentAuthority{}, a)
+}
+
+// WithDocumentReader supplies the reader that ExtractRules checks quotes
+// against. Without one, rule extraction is refused rather than trusted, because
+// an unchecked quote is not evidence.
+func WithDocumentReader(d DocumentReader) ServiceOption {
+	return newServiceOption(identDocumentReader{}, d)
+}
 
 // WithContextTTL sets how long a context handle stays usable.
 func WithContextTTL(d time.Duration) ServiceOption { return newServiceOption(identContextTTL{}, d) }

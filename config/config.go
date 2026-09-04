@@ -67,6 +67,13 @@ type Config struct {
 	// empty list allows any root.
 	AllowedRoots []string `yaml:"allowed_roots,omitempty"`
 
+	// DocumentRoots are the directories that context_extract_rules may read
+	// instruction files from. It is empty by default, which disables the tool:
+	// naming a path and learning whether a quote appears in it is enough to
+	// read a file back a piece at a time, so the reachable set is chosen
+	// deliberately rather than defaulted.
+	DocumentRoots []string `yaml:"document_roots,omitempty"`
+
 	// RepositoryAliases maps alternate remote spellings onto one canonical
 	// repository. Use it for mirrors, never to merge a fork into its upstream.
 	RepositoryAliases map[string]string `yaml:"repository_aliases,omitempty"`
@@ -85,28 +92,43 @@ type Defaults struct {
 	SearchLimit           int      `yaml:"search_limit"`
 	ContextTTL            Duration `yaml:"context_ttl"`
 	MaxCandidates         int      `yaml:"max_candidates"`
+
+	// MinSearchScore and MinSearchRelevance are floors a lexical search hit
+	// must clear to be returned at all. They are pointers so that an omitted
+	// key keeps the store's own default while an explicit 0 disables the
+	// floor, which a plain float64 cannot express. See
+	// sqlite.WithMinSearchScore and sqlite.WithMinSearchRelevance for what
+	// each one means.
+	MinSearchScore     *float64 `yaml:"min_search_score,omitempty"`
+	MinSearchRelevance *float64 `yaml:"min_search_relevance,omitempty"`
 }
 
 // Validation controls freshness checking.
 type Validation struct {
 	// TTL bounds how long a freshness result is reused.
 	TTL Duration `yaml:"ttl"`
-	// Git enables revision and content-hash validation against local
-	// repositories. It shells out to git, so it is opt-in.
+	// Git enables the commit-ancestor policy, which shells out to git and so is
+	// opt-in. Checking that a file still exists and still hashes the same needs
+	// no git and is always on: without it, a record extracted from a document
+	// never notices the document changing, which is the one thing that makes
+	// activating it without review safe.
 	Git bool `yaml:"git"`
 }
 
 // ClientProfile is what one agent host is allowed to do.
+//
+// A profile is selected by a command-line flag, so anyone who can edit the MCP
+// host configuration can pick any profile. It shapes what each host sees; it is
+// not a security control. See docs/design-deltas.md.
 type ClientProfile struct {
 	Capabilities        []mecp.Capability `yaml:"capabilities"`
-	MaxSensitivity      mecp.Sensitivity  `yaml:"max_sensitivity"`
 	AllowedRepositories []string          `yaml:"allowed_repositories,omitempty"`
 	AllowedRoots        []string          `yaml:"allowed_roots,omitempty"`
 }
 
 // Default returns the configuration a fresh installation gets. The default
-// agent profile can prepare context, search project-sensitivity records, and
-// read project evidence. It cannot read personal records and cannot propose.
+// agent profile can prepare context, search, and read verbatim evidence. It
+// cannot propose, so the agent-facing process opens the database read-only.
 func Default() *Config {
 	return &Config{
 		Principal: "local-user",
@@ -125,10 +147,9 @@ func Default() *Config {
 			DefaultClientID: {
 				Capabilities: []mecp.Capability{
 					mecp.CapPrepare,
-					mecp.CapSearchProject,
-					mecp.CapEvidenceProject,
+					mecp.CapSearch,
+					mecp.CapEvidence,
 				},
-				MaxSensitivity: mecp.SensitivityProject,
 			},
 		},
 	}
@@ -209,9 +230,6 @@ func (c *Config) Validate() error {
 				return fmt.Errorf(`client profile %q declares unknown capability %q`, name, cap)
 			}
 		}
-		if profile.MaxSensitivity != "" && !profile.MaxSensitivity.Valid() {
-			return fmt.Errorf(`client profile %q declares unknown sensitivity %q`, name, profile.MaxSensitivity)
-		}
 	}
 	return nil
 }
@@ -238,7 +256,6 @@ func (c *Config) Caller(clientID string) mecp.Caller {
 		PrincipalID:         c.Principal,
 		ClientID:            clientID,
 		Capabilities:        profile.Capabilities,
-		MaxSensitivity:      profile.MaxSensitivity,
 		AllowedRepositories: profile.AllowedRepositories,
 		AllowedRoots:        roots,
 	}
@@ -248,10 +265,9 @@ func (c *Config) Caller(clientID string) mecp.Caller {
 // from any agent-facing transport.
 func (c *Config) AdminCaller() mecp.Caller {
 	return mecp.Caller{
-		PrincipalID:    c.Principal,
-		ClientID:       "contextctl",
-		Capabilities:   []mecp.Capability{mecp.CapAdmin},
-		MaxSensitivity: mecp.SensitivityRestricted,
+		PrincipalID:  c.Principal,
+		ClientID:     "contextctl",
+		Capabilities: []mecp.Capability{mecp.CapAdmin},
 	}
 }
 

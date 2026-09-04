@@ -31,11 +31,9 @@ defaults:
   context_ttl: 2h
 clients:
   claude-code:
-    capabilities: [context:prepare, context:search:project]
-    max_sensitivity: project
+    capabilities: [context:prepare, context:search]
   trusted:
-    capabilities: [context:prepare, context:search:personal, context:evidence:personal, context:propose]
-    max_sensitivity: personal
+    capabilities: [context:prepare, context:search, context:evidence, context:propose]
 `)
 
 		cfg, err := config.Load(path)
@@ -80,11 +78,9 @@ database: /tmp/x.db
 allowed_roots: [/work]
 clients:
   default:
-    capabilities: [context:prepare, context:search:project]
-    max_sensitivity: project
+    capabilities: [context:prepare, context:search]
   trusted:
-    capabilities: [context:prepare, context:search:personal, context:propose]
-    max_sensitivity: personal
+    capabilities: [context:prepare, context:search, context:evidence, context:propose]
     allowed_repositories: [https://github.com/lestrrat-go/helium]
 `)
 	cfg, err := config.Load(path)
@@ -93,7 +89,7 @@ clients:
 	t.Run("a named profile gets exactly its capabilities", func(t *testing.T) {
 		caller := cfg.Caller("trusted")
 		require.True(t, caller.Has(mecp.CapPropose))
-		require.Equal(t, mecp.SensitivityPersonal, caller.SensitivityCeiling())
+		require.True(t, caller.Has(mecp.CapEvidence))
 		require.True(t, caller.RepositoryAllowed("https://github.com/lestrrat-go/helium"))
 		require.False(t, caller.RepositoryAllowed("https://github.com/example/billing"))
 	})
@@ -101,7 +97,7 @@ clients:
 	t.Run("an unknown client falls back to the default profile", func(t *testing.T) {
 		caller := cfg.Caller("some-agent-nobody-configured")
 		require.False(t, caller.Has(mecp.CapPropose))
-		require.Equal(t, mecp.SensitivityProject, caller.SensitivityCeiling())
+		require.False(t, caller.Has(mecp.CapEvidence))
 	})
 
 	t.Run("global allowed roots apply to a profile that names none", func(t *testing.T) {

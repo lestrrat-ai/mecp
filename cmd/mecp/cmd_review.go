@@ -22,6 +22,8 @@ through repetition.`,
 			reviewShowCommand(),
 			reviewApproveCommand(),
 			reviewRejectCommand(),
+			reviewReopenCommand(),
+			reviewRemoveCommand(),
 		},
 	}
 }
@@ -143,7 +145,6 @@ func reviewApproveCommand() *cli.Command {
 			&cli.StringFlag{Name: "rationale", Usage: "replace the proposed rationale"},
 			&cli.StringFlag{Name: "kind", Usage: "replace the proposed kind"},
 			&cli.StringFlag{Name: "authority", Usage: "authority to grant", Value: string(mecp.AuthorityUser)},
-			&cli.StringFlag{Name: "sensitivity", Usage: "sensitivity to assign", Value: string(mecp.SensitivityProject)},
 			&cli.StringFlag{Name: "validation", Usage: "freshness policy"},
 			&cli.StringFlag{Name: "review-after", Usage: "set a review date"},
 			&cli.StringSliceFlag{Name: "tag", Usage: "replace the proposed tags"},
@@ -179,7 +180,6 @@ func runReviewApprove(ctx context.Context, cmd *cli.Command) error {
 		Statement:        cmd.String("statement"),
 		Rationale:        cmd.String("rationale"),
 		Authority:        mecp.Authority(cmd.String("authority")),
-		Sensitivity:      mecp.Sensitivity(cmd.String("sensitivity")),
 		ValidationPolicy: mecp.ValidationPolicy(cmd.String("validation")),
 		ReviewAfter:      reviewAfter,
 		Tags:             cmd.StringSlice("tag"),
@@ -206,6 +206,88 @@ agent proposes it again.`,
 		),
 		Action: runReviewReject,
 	}
+}
+
+func reviewReopenCommand() *cli.Command {
+	return &cli.Command{
+		Name:      "reopen",
+		Usage:     "put a rejected proposal back in the queue",
+		ArgsUsage: "<proposal-id>",
+		Description: `A rejection is permanent for the agent that filed it: the same rule from the
+same document collides with the rejected proposal and is silently discarded.
+Reopen it when you turned it down for a reason that has since been fixed, rather
+than because the rule was wrong.`,
+		Flags: append(globalFlags(),
+			&cli.StringFlag{Name: "note", Usage: "why it is being reopened"},
+		),
+		Action: runReviewReopen,
+	}
+}
+
+func reviewRemoveCommand() *cli.Command {
+	return &cli.Command{
+		Name:      "rm",
+		Usage:     "delete a proposal permanently",
+		ArgsUsage: "<proposal-id>...",
+		Description: `Removes the proposal and frees its key, so the same rule can be filed again
+from scratch.
+
+Prefer "reject" for a suggestion you considered and turned down, because the
+rejection is what stops it coming back. Use this for proposals that should never
+have existed, such as ones a broken extraction produced.`,
+		Flags: append(globalFlags(),
+			&cli.BoolFlag{Name: "yes", Aliases: []string{"y"}, Usage: "skip the confirmation prompt"},
+		),
+		Action: runReviewRemove,
+	}
+}
+
+func runReviewRemove(ctx context.Context, cmd *cli.Command) error {
+	ids := cmd.Args().Slice()
+	if len(ids) == 0 {
+		return fmt.Errorf(`at least one proposal ID is required`)
+	}
+	if !cmd.Bool("yes") {
+		return fmt.Errorf(`this permanently deletes %d proposal(s); re-run with --yes to confirm`, len(ids))
+	}
+
+	rt, err := openRuntime(ctx, cmd, false)
+	if err != nil {
+		return err
+	}
+	defer rt.Close()
+
+	for _, id := range ids {
+		if err := rt.store.DeleteProposal(ctx, id); err != nil {
+			return err
+		}
+		fmt.Printf("%s deleted\n", id)
+	}
+	return nil
+}
+
+func runReviewReopen(ctx context.Context, cmd *cli.Command) error {
+	id := cmd.Args().First()
+	if id == "" {
+		return fmt.Errorf(`a proposal ID is required`)
+	}
+
+	rt, err := openRuntime(ctx, cmd, false)
+	if err != nil {
+		return err
+	}
+	defer rt.Close()
+
+	p, err := rt.store.GetProposal(ctx, id)
+	if err != nil {
+		return err
+	}
+	if err := mecp.ReopenProposal(ctx, rt.store, p, cmd.String("note"), time.Now().UTC()); err != nil {
+		return err
+	}
+
+	fmt.Printf("%s is pending review again\n", p.ID)
+	return nil
 }
 
 func runReviewReject(ctx context.Context, cmd *cli.Command) error {

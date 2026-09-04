@@ -14,7 +14,7 @@ import (
 
 const recordColumns = `
 	r.id, r.kind, r.subject, r.statement, r.rationale, r.authority, r.status, r.confidence,
-	r.sensitivity, r.valid_from, r.valid_until, r.review_after, r.last_verified_at,
+	r.valid_from, r.valid_until, r.review_after, r.last_verified_at,
 	r.validation_policy, r.superseded_by, r.conflict_group, r.created_at, r.updated_at,
 	sc.principal, sc.org, sc.repository, sc.branch_patterns, sc.path_patterns, sc.task_kinds, sc.conditions`
 
@@ -34,12 +34,12 @@ func (s *Store) PutRecord(ctx context.Context, rec *mecp.Record) error {
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO records (
 				id, kind, subject, normalized_subject, statement, rationale, authority, status,
-				confidence, sensitivity, sensitivity_level, valid_from, valid_until, review_after,
+				confidence, valid_from, valid_until, review_after,
 				last_verified_at, validation_policy, superseded_by, conflict_group, created_at, updated_at
-			) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			rec.ID, string(rec.Kind), rec.Subject, rec.NormalizedSubject(), rec.Statement, rec.Rationale,
-			string(rec.Authority), string(rec.Status), rec.Confidence, string(rec.Sensitivity),
-			rec.Sensitivity.Level(), formatTime(rec.ValidFrom), formatTimePtr(rec.ValidUntil),
+			string(rec.Authority), string(rec.Status), rec.Confidence,
+			formatTime(rec.ValidFrom), formatTimePtr(rec.ValidUntil),
 			formatTimePtr(rec.ReviewAfter), formatTimePtr(rec.LastVerifiedAt), string(rec.ValidationPolicy),
 			rec.SupersededBy, rec.ConflictGroup, formatTime(rec.CreatedAt), formatTime(rec.UpdatedAt),
 		); err != nil {
@@ -104,15 +104,15 @@ func putTags(ctx context.Context, tx *sql.Tx, rec *mecp.Record) error {
 func putSources(ctx context.Context, tx *sql.Tx, rec *mecp.Record) error {
 	for i, src := range rec.Sources {
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO sources (id, type, locator, revision, content_hash, exact_excerpt, captured_at, sensitivity, validation_policy)
-			VALUES (?,?,?,?,?,?,?,?,?)
+			INSERT INTO sources (id, type, locator, revision, content_hash, exact_excerpt, captured_at, validation_policy)
+			VALUES (?,?,?,?,?,?,?,?)
 			ON CONFLICT(id) DO UPDATE SET
 				type = excluded.type, locator = excluded.locator, revision = excluded.revision,
 				content_hash = excluded.content_hash, exact_excerpt = excluded.exact_excerpt,
-				captured_at = excluded.captured_at, sensitivity = excluded.sensitivity,
+				captured_at = excluded.captured_at,
 				validation_policy = excluded.validation_policy`,
 			src.ID, string(src.Type), src.Locator, src.Revision, src.ContentHash, src.ExactExcerpt,
-			formatTime(src.CapturedAt), string(src.Sensitivity), string(src.ValidationPolicy),
+			formatTime(src.CapturedAt), string(src.ValidationPolicy),
 		); err != nil {
 			return fmt.Errorf(`failed to insert source %s: %w`, src.ID, err)
 		}
@@ -255,10 +255,6 @@ func buildWhere(q mecp.RecordQuery) ([]string, []any, bool) {
 		where = append(where, `(sc.principal = '' OR sc.principal = ?)`)
 		args = append(args, q.PrincipalID)
 	}
-	if q.MaxSensitivity != "" {
-		where = append(where, `r.sensitivity_level <= ?`)
-		args = append(args, q.MaxSensitivity.Level())
-	}
 	if q.RestrictRepositories {
 		switch {
 		case len(q.Repositories) > 0 && q.AllowGlobal:
@@ -328,18 +324,18 @@ type rowScanner interface {
 // example) can reuse the same scanner.
 func scanRecord(rows rowScanner, extra ...any) (*mecp.Record, error) {
 	var (
-		rec                                  mecp.Record
-		kind, authority, status, sensitivity string
-		policy                               string
-		validFrom                            string
-		createdAt, updatedAt                 string
-		validUntil, reviewAfter, lastVerify  sql.NullString
-		branches, paths, taskKinds, conds    string
+		rec                                 mecp.Record
+		kind, authority, status             string
+		policy                              string
+		validFrom                           string
+		createdAt, updatedAt                string
+		validUntil, reviewAfter, lastVerify sql.NullString
+		branches, paths, taskKinds, conds   string
 	)
 
 	dest := []any{
 		&rec.ID, &kind, &rec.Subject, &rec.Statement, &rec.Rationale, &authority, &status, &rec.Confidence,
-		&sensitivity, &validFrom, &validUntil, &reviewAfter, &lastVerify,
+		&validFrom, &validUntil, &reviewAfter, &lastVerify,
 		&policy, &rec.SupersededBy, &rec.ConflictGroup, &createdAt, &updatedAt,
 		&rec.Scope.User, &rec.Scope.Org, &rec.Scope.Repository, &branches, &paths, &taskKinds, &conds,
 	}
@@ -352,7 +348,6 @@ func scanRecord(rows rowScanner, extra ...any) (*mecp.Record, error) {
 	rec.Kind = mecp.RecordKind(kind)
 	rec.Authority = mecp.Authority(authority)
 	rec.Status = mecp.RecordStatus(status)
-	rec.Sensitivity = mecp.Sensitivity(sensitivity)
 	rec.ValidationPolicy = mecp.ValidationPolicy(policy)
 
 	var err error
@@ -424,7 +419,7 @@ func (s *Store) hydrate(ctx context.Context, recs []*mecp.Record) ([]*mecp.Recor
 
 	srcRows, err := s.db.QueryContext(ctx, `
 		SELECT rs.record_id, s.id, s.type, s.locator, s.revision, s.content_hash, s.exact_excerpt,
-		       s.captured_at, s.sensitivity, s.validation_policy
+		       s.captured_at, s.validation_policy
 		FROM record_sources rs JOIN sources s ON s.id = rs.source_id
 		WHERE rs.record_id IN (`+placeholders(len(ids))+`)
 		ORDER BY rs.record_id, rs.position`, ids...)
@@ -433,15 +428,14 @@ func (s *Store) hydrate(ctx context.Context, recs []*mecp.Record) ([]*mecp.Recor
 	}
 	if err := scanInto(srcRows, func(rows *sql.Rows) error {
 		var (
-			recordID, srcType, capturedAt, sensitivity, policy string
-			src                                                mecp.Source
+			recordID, srcType, capturedAt, policy string
+			src                                   mecp.Source
 		)
 		if err := rows.Scan(&recordID, &src.ID, &srcType, &src.Locator, &src.Revision,
-			&src.ContentHash, &src.ExactExcerpt, &capturedAt, &sensitivity, &policy); err != nil {
+			&src.ContentHash, &src.ExactExcerpt, &capturedAt, &policy); err != nil {
 			return err
 		}
 		src.Type = mecp.SourceType(srcType)
-		src.Sensitivity = mecp.Sensitivity(sensitivity)
 		src.ValidationPolicy = mecp.ValidationPolicy(policy)
 		t, err := parseTime(capturedAt)
 		if err != nil {
@@ -544,3 +538,26 @@ func orEmptyMap(in map[string]string) map[string]string {
 
 // IsNotFound reports whether err means the addressed row does not exist.
 func IsNotFound(err error) bool { return errors.Is(err, mecp.ErrNotFound) }
+
+// KnownRepositories returns every canonical repository some record is scoped
+// to, sorted and without duplicates.
+func (s *Store) KnownRepositories(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT DISTINCT repository FROM record_scopes WHERE repository != '' ORDER BY repository`)
+	if err != nil {
+		return nil, fmt.Errorf(`failed to list repositories: %w`, err)
+	}
+
+	var out []string
+	if err := scanInto(rows, func(rows *sql.Rows) error {
+		var repo string
+		if err := rows.Scan(&repo); err != nil {
+			return err
+		}
+		out = append(out, repo)
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	return out, nil
+}

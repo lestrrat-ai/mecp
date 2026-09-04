@@ -29,6 +29,7 @@ const (
 	ToolSearch        = "context_search"
 	ToolGetRecords    = "context_get_records"
 	ToolProposeRecord = "context_propose_record"
+	ToolExtractRules  = "context_extract_rules"
 )
 
 // ServerName and ServerVersion identify this implementation to hosts.
@@ -89,7 +90,10 @@ func New(svc mecp.Service, caller mecp.Caller, options ...Option) (*Server, erro
 		return nil, fmt.Errorf(`client profile is not usable: %w`, err)
 	}
 
-	s := &Server{svc: svc, caller: caller, limits: DefaultLimits()}
+	// The gateway is the MCP boundary, so it stamps the origin itself rather
+	// than trusting what it was handed. Everything served here reached the
+	// service over MCP, whatever the configuration that built the caller said.
+	s := &Server{svc: svc, caller: caller.WithOrigin(mecp.OriginMCP), limits: DefaultLimits()}
 	for _, opt := range options {
 		opt(s)
 	}
@@ -129,7 +133,7 @@ func (s *Server) register() {
 		}, s.handlePrepareTask)
 	}
 
-	if s.caller.Has(mecp.CapSearchProject) || s.caller.Has(mecp.CapSearchPersonal) {
+	if s.caller.Has(mecp.CapSearch) {
 		mcp.AddTool(s.mcp, &mcp.Tool{
 			Name:        ToolSearch,
 			Title:       "Search stored context",
@@ -160,6 +164,19 @@ func (s *Server) register() {
 			},
 			InputSchema: proposeRecordSchema(),
 		}, s.handleProposeRecord)
+
+		mcp.AddTool(s.mcp, &mcp.Tool{
+			Name:        ToolExtractRules,
+			Title:       "Extract rules from an instruction document",
+			Description: extractRulesDescription,
+			Annotations: &mcp.ToolAnnotations{
+				ReadOnlyHint:    false,
+				IdempotentHint:  true,
+				DestructiveHint: ptr(false),
+				OpenWorldHint:   ptr(false),
+			},
+			InputSchema: extractRulesSchema(),
+		}, s.handleExtractRules)
 	}
 }
 
@@ -192,6 +209,27 @@ const proposeRecordDescription = `Propose a new or superseding context record fo
 The proposal stays inactive, changes nothing, and cannot override existing context. Use it only
 when the current interaction contains clear supporting evidence, and quote that evidence rather
 than paraphrasing it. Repeating the same proposal_key returns the existing proposal.`
+
+const extractRulesDescription = `Read an instruction document such as a CLAUDE.md or AGENTS.md and file the rules
+it contains for the user to review.
+
+Deciding what counts as a rule is your job: which bullets are really one rule, what each
+one is about, whether it is an absolute constraint or a default preference, and which
+scope it belongs in. Take the document's own structure seriously and do not invent rules
+it does not state.
+
+Every rule must carry the exact text it came from in "quote", copied rather than
+paraphrased. The server checks each quote against the file and refuses any rule whose
+quote does not appear, so a rule you cannot quote is a rule you should not file.
+
+The result also lists any line the document presents as a rule that none of your quotes
+covers, so keeping a section's headline while dropping the table of specifics under it
+does not pass unnoticed. Either file those too, or say why they are not rules.
+
+A rule that checks out is stored as an active record straight away. One that needs a
+person is held instead: when the statement no longer resembles the line it came from,
+when an active record already says something different about the same subject, or when
+one already says the same thing. The result tells you which happened to each rule.`
 
 // toolError converts a domain error into a tool execution error whose text
 // carries the stable code, so an agent can decide whether a retry is sensible.

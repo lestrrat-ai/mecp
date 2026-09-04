@@ -29,12 +29,11 @@ func TestJSONLRoundTrip(t *testing.T) {
 	records := []*mecp.Record{
 		{
 			ID: "rec_b", Kind: mecp.KindDecision, Subject: "conformance suite",
-			Statement:   "The suite runs against a controlled commit.",
-			Rationale:   "Reproducibility comes from choosing the commit at release time.",
-			Scope:       mecp.Scope{Repository: "https://github.com/lestrrat-go/helium", TaskKinds: []mecp.TaskKind{mecp.TaskRelease}},
-			Authority:   mecp.AuthorityUser,
-			Sensitivity: mecp.SensitivityProject,
-			Tags:        []string{"conformance"},
+			Statement: "The suite runs against a controlled commit.",
+			Rationale: "Reproducibility comes from choosing the commit at release time.",
+			Scope:     mecp.Scope{Repository: "https://github.com/lestrrat-go/helium", TaskKinds: []mecp.TaskKind{mecp.TaskRelease}},
+			Authority: mecp.AuthorityUser,
+			Tags:      []string{"conformance"},
 			Sources: []mecp.Source{{
 				ID: "src_1", Type: mecp.SourceConversation, Locator: "turn://42",
 				ExactExcerpt: "We pin the suite before each release.",
@@ -42,9 +41,8 @@ func TestJSONLRoundTrip(t *testing.T) {
 		},
 		{
 			ID: "rec_a", Kind: mecp.KindConstraint, Subject: "untrusted stylesheets",
-			Statement:   "Untrusted XSLT stylesheets must never be executed.",
-			Authority:   mecp.AuthorityRepository,
-			Sensitivity: mecp.SensitivityProject,
+			Statement: "Untrusted XSLT stylesheets must never be executed.",
+			Authority: mecp.AuthorityRepository,
 		},
 	}
 	for _, rec := range records {

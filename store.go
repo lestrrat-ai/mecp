@@ -13,8 +13,8 @@ var ErrNotFound = errors.New("mecp: not found")
 // store itself, before any full-text matching, so that an unauthorized row
 // never reaches ranking, snippet generation, or even a result count.
 //
-// PrincipalID and MaxSensitivity are the security-critical fields: a store
-// implementation must apply them unconditionally.
+// PrincipalID is the security-critical field: a store implementation must
+// apply it unconditionally.
 type RecordQuery struct {
 	PrincipalID string
 
@@ -30,12 +30,11 @@ type RecordQuery struct {
 	Repositories         []string
 	AllowGlobal          bool
 
-	MaxSensitivity Sensitivity
-	Kinds          []RecordKind
-	Statuses       []RecordStatus
-	Tags           []string
-	IDs            []string
-	Subject        string
+	Kinds    []RecordKind
+	Statuses []RecordStatus
+	Tags     []string
+	IDs      []string
+	Subject  string
 
 	// At bounds the validity interval. A zero time disables the check, which
 	// the administrative CLI uses to list historical records.
@@ -61,7 +60,13 @@ type SearchQuery struct {
 type ScoredRecord struct {
 	Record    *Record
 	Relevance float64
-	Terms     []string
+	// RawScore is the un-normalized bm25-derived score (larger is better),
+	// kept alongside Relevance because Relevance is only ever meaningful
+	// relative to the best hit in the same result set: a lone weak match still
+	// gets a Relevance of 1.00. RawScore lets a caller judge a hit against an
+	// absolute floor instead.
+	RawScore float64
+	Terms    []string
 }
 
 // ProposalStatus is the review state of an agent-submitted proposal.
@@ -136,6 +141,12 @@ type Store interface {
 	// SupersededBy returns the IDs of records that supersede the given record.
 	SupersededBy(ctx context.Context, ids []string) (map[string][]string, error)
 
+	// KnownRepositories returns every canonical repository that at least one
+	// record is scoped to, sorted. It exists so the service can tell the
+	// difference between "nothing is stored for this repository" and "you named
+	// a repository this store has never heard of".
+	KnownRepositories(ctx context.Context) ([]string, error)
+
 	// PutProposal stores a proposal, returning the existing one when its key
 	// has already been used. The boolean reports whether a new row was created.
 	PutProposal(ctx context.Context, p *Proposal) (*Proposal, bool, error)
@@ -145,6 +156,12 @@ type Store interface {
 
 	// UpdateProposal writes back a reviewed proposal.
 	UpdateProposal(ctx context.Context, p *Proposal) error
+
+	// DeleteProposal removes a proposal and its evidence permanently, freeing
+	// its key. A decided proposal otherwise blocks its own key forever, which
+	// is right for a suggestion that was considered and is wrong for one that
+	// only ever existed because of a bug.
+	DeleteProposal(ctx context.Context, id string) error
 
 	// QueryProposals lists proposals matching a filter, newest first.
 	QueryProposals(ctx context.Context, q ProposalQuery) ([]*Proposal, error)

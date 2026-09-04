@@ -93,9 +93,7 @@ func (s *service) ProposeRecord(ctx context.Context, req ProposeRecordRequest) (
 		return nil, wrapf(CodeStorage, err, "cannot store proposal")
 	}
 
-	s.writeAudit(ctx, AuditEvent{
-		PrincipalID: req.Caller.PrincipalID,
-		ClientID:    req.Caller.ClientID,
+	s.writeAudit(ctx, req.Caller, AuditEvent{
 		Operation:   "propose_record",
 		Scope:       EffectiveScope{Principal: req.Caller.PrincipalID, Repository: scope.Repository},
 		ProposalID:  stored.ID,
@@ -127,8 +125,16 @@ func ApproveProposal(ctx context.Context, store Store, p *Proposal, approver str
 		return nil, errorf(CodeInvalidRecord, "proposal %s is already %s", p.ID, p.Status)
 	}
 
+	// A proposal that came from a document carries that document's rule key, so
+	// approving it must produce the identifier direct activation would have
+	// produced. Otherwise one rule ends up stored twice, once per path.
+	id := NewID("rec")
+	if strings.HasPrefix(p.Key, "doc:") {
+		id = RecordIDForKey(p.Key)
+	}
+
 	rec := &Record{
-		ID:               NewID("rec"),
+		ID:               id,
 		Kind:             p.Kind,
 		Subject:          p.Subject,
 		Statement:        p.Statement,
@@ -136,7 +142,6 @@ func ApproveProposal(ctx context.Context, store Store, p *Proposal, approver str
 		Scope:            p.Scope.Clone(),
 		Authority:        AuthorityUser,
 		Status:           StatusActive,
-		Sensitivity:      SensitivityProject,
 		ValidationPolicy: ValidateNone,
 		Tags:             slices.Clone(p.Tags),
 		Sources:          slices.Clone(p.Evidence),
@@ -192,6 +197,38 @@ func RejectProposal(ctx context.Context, store Store, p *Proposal, reviewer, not
 	return nil
 }
 
+// ReopenProposal puts a decided proposal back in the queue.
+//
+// A rejection is meant to stop the same suggestion coming back forever, which
+// is right when the idea was wrong and wrong when only its packaging was. The
+// proposal key makes a rejection permanent otherwise: the same rule from the
+// same document collides with it and is silently discarded.
+//
+// Like approval, this is not reachable from any agent-facing tool.
+func ReopenProposal(ctx context.Context, store Store, p *Proposal, note string, now time.Time) error {
+	if p.Status == ProposalPending {
+		return errorf(CodeInvalidRecord, "proposal %s is already pending review", p.ID)
+	}
+	if p.Status == ProposalApproved && p.ResultRecordID != "" {
+		return errorf(CodeInvalidRecord,
+			"proposal %s was approved as record %s; edit or supersede that record instead of reopening the proposal",
+			p.ID, p.ResultRecordID)
+	}
+
+	p.Status = ProposalPending
+	p.DecidedAt = nil
+	p.DecidedBy = ""
+	// The earlier decision's note is kept alongside the reason for reopening,
+	// so the history reads as a sequence rather than being overwritten.
+	if note != "" {
+		p.DecisionNote = strings.TrimSpace(p.DecisionNote + "\nreopened " + now.UTC().Format(time.RFC3339) + ": " + note)
+	}
+	if err := store.UpdateProposal(ctx, p); err != nil {
+		return wrapf(CodeStorage, err, "cannot reopen proposal %s", p.ID)
+	}
+	return nil
+}
+
 // applyEdits overlays the reviewer's changes onto the record built from a
 // proposal. Only fields the reviewer actually set are taken.
 func applyEdits(rec, edits *Record) {
@@ -209,9 +246,6 @@ func applyEdits(rec, edits *Record) {
 	}
 	if edits.Authority != "" {
 		rec.Authority = edits.Authority
-	}
-	if edits.Sensitivity != "" {
-		rec.Sensitivity = edits.Sensitivity
 	}
 	if edits.ValidationPolicy != "" {
 		rec.ValidationPolicy = edits.ValidationPolicy

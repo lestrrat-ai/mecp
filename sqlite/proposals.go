@@ -241,3 +241,24 @@ func (s *Store) hydrateProposals(ctx context.Context, ps []*mecp.Proposal) error
 	}
 	return nil
 }
+
+// DeleteProposal removes a proposal and its evidence permanently.
+func (s *Store) DeleteProposal(ctx context.Context, id string) error {
+	return s.withTx(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `DELETE FROM proposals WHERE id = ?`, id)
+		if err != nil {
+			return fmt.Errorf(`failed to delete proposal %s: %w`, id, err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return mecp.ErrNotFound
+		}
+		// proposal_sources cascades, but the cascade only fires with foreign
+		// keys on, so the evidence is removed explicitly too.
+		_, err = tx.ExecContext(ctx, `DELETE FROM proposal_sources WHERE proposal_id = ?`, id)
+		return err
+	})
+}
