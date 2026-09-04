@@ -33,7 +33,7 @@ func recordAddCommand() *cli.Command {
 		Name:      "add",
 		Usage:     "add a record",
 		ArgsUsage: "<statement>",
-		Flags: append(globalFlags(),
+		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "kind", Usage: "one of " + joinRecordKinds(), Value: string(mecp.KindDecision)},
 			&cli.StringFlag{Name: "subject", Usage: "short name for what this is about; derived from the statement when omitted"},
 			&cli.StringFlag{Name: "rationale", Usage: "why this is the case"},
@@ -51,7 +51,7 @@ func recordAddCommand() *cli.Command {
 			&cli.StringSliceFlag{Name: "source", Usage: "evidence as type:locator (repeatable)"},
 			&cli.StringFlag{Name: "excerpt", Usage: "verbatim excerpt supporting the first source"},
 			&cli.StringSliceFlag{Name: "supersedes", Usage: "record ID this replaces (repeatable)"},
-		),
+		},
 		Action: runRecordAdd,
 	}
 }
@@ -168,14 +168,14 @@ func recordListCommand() *cli.Command {
 	return &cli.Command{
 		Name:  "list",
 		Usage: "list records",
-		Flags: append(globalFlags(),
+		Flags: []cli.Flag{
 			&cli.StringSliceFlag{Name: "kind", Usage: "restrict to a record kind (repeatable)"},
 			&cli.StringSliceFlag{Name: "status", Usage: "restrict to a lifecycle status (repeatable)"},
 			&cli.StringFlag{Name: "repository", Aliases: []string{"r"}, Usage: "restrict to a repository"},
 			&cli.StringSliceFlag{Name: "tag", Usage: "restrict to a tag (repeatable)"},
 			&cli.IntFlag{Name: "limit", Value: 50},
 			&cli.BoolFlag{Name: "json"},
-		),
+		},
 		Action: runRecordList,
 	}
 }
@@ -222,7 +222,7 @@ func recordShowCommand() *cli.Command {
 		Name:      "show",
 		Usage:     "show one record in full, including evidence",
 		ArgsUsage: "<record-id>...",
-		Flags:     append(globalFlags(), &cli.BoolFlag{Name: "json"}),
+		Flags:     []cli.Flag{&cli.BoolFlag{Name: "json"}},
 		Action:    runRecordShow,
 	}
 }
@@ -289,10 +289,10 @@ func recordSupersedeCommand() *cli.Command {
 		Name:      "supersede",
 		Usage:     "replace a record with a new one, preserving the history",
 		ArgsUsage: "<old-record-id> <new statement>",
-		Flags: append(globalFlags(),
+		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "rationale"},
 			&cli.StringFlag{Name: "kind", Usage: "defaults to the superseded record's kind"},
-		),
+		},
 		Action: runRecordSupersede,
 	}
 }
@@ -357,7 +357,6 @@ func recordStatusCommand() *cli.Command {
 
 Marking a record disputed says that credible sources disagree and no resolution
 has been recorded; the record stops acting as guidance but stays visible.`,
-		Flags:  globalFlags(),
 		Action: runRecordStatus,
 	}
 }
@@ -399,9 +398,9 @@ func recordVerifyCommand() *cli.Command {
 		ArgsUsage: "<record-id>...",
 		Description: `Sets last_verified_at to now and clears a passed review date by pushing it
 forward, which is what takes a record out of the stale state.`,
-		Flags: append(globalFlags(),
+		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "review-again", Usage: "set the next review date (RFC3339 or YYYY-MM-DD)"},
-		),
+		},
 		Action: runRecordVerify,
 	}
 }
@@ -451,7 +450,7 @@ func recordRemoveCommand() *cli.Command {
 		Description: `Deletion removes the record from the search index and every relationship, not
 just from listings. Prefer "record status archived" when you want to keep the
 history.`,
-		Flags:  append(globalFlags(), &cli.BoolFlag{Name: "yes", Aliases: []string{"y"}, Usage: "skip the confirmation prompt"}),
+		Flags:  []cli.Flag{&cli.BoolFlag{Name: "yes", Aliases: []string{"y"}, Usage: "skip the confirmation prompt"}},
 		Action: runRecordRemove,
 	}
 }

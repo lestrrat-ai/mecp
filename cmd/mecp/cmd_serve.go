@@ -20,7 +20,7 @@ The database is opened read-only unless the selected client profile holds the
 propose capability, so a read-only agent cannot write to the store at all.
 
 Stdout carries MCP protocol messages only; diagnostics go to stderr.`,
-		Flags: append(globalFlags(),
+		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:    "client",
 				Usage:   "client profile to apply, as named under clients: in the configuration",
@@ -32,7 +32,7 @@ Stdout carries MCP protocol messages only; diagnostics go to stderr.`,
 				Usage: "serve over stdio (the only transport in this release)",
 				Value: true,
 			},
-		),
+		},
 		Action: runMCP,
 	}
 }

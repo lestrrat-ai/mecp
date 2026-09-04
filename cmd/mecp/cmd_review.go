@@ -32,11 +32,11 @@ func reviewListCommand() *cli.Command {
 	return &cli.Command{
 		Name:  "list",
 		Usage: "list proposals",
-		Flags: append(globalFlags(),
+		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "status", Usage: "pending_review, approved, or rejected", Value: string(mecp.ProposalPending)},
 			&cli.IntFlag{Name: "limit", Value: 50},
 			&cli.BoolFlag{Name: "json"},
-		),
+		},
 		Action: runReviewList,
 	}
 }
@@ -75,7 +75,7 @@ func reviewShowCommand() *cli.Command {
 		Name:      "show",
 		Usage:     "show a proposal beside the evidence that supports it",
 		ArgsUsage: "<proposal-id>",
-		Flags:     append(globalFlags(), &cli.BoolFlag{Name: "json"}),
+		Flags:     []cli.Flag{&cli.BoolFlag{Name: "json"}},
 		Action:    runReviewShow,
 	}
 }
@@ -140,7 +140,7 @@ func reviewApproveCommand() *cli.Command {
 		Name:      "approve",
 		Usage:     "approve a proposal, activating it as a record",
 		ArgsUsage: "<proposal-id>",
-		Flags: append(globalFlags(),
+		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "statement", Usage: "replace the proposed statement"},
 			&cli.StringFlag{Name: "rationale", Usage: "replace the proposed rationale"},
 			&cli.StringFlag{Name: "kind", Usage: "replace the proposed kind"},
@@ -148,7 +148,7 @@ func reviewApproveCommand() *cli.Command {
 			&cli.StringFlag{Name: "validation", Usage: "freshness policy"},
 			&cli.StringFlag{Name: "review-after", Usage: "set a review date"},
 			&cli.StringSliceFlag{Name: "tag", Usage: "replace the proposed tags"},
-		),
+		},
 		Action: runReviewApprove,
 	}
 }
@@ -201,9 +201,9 @@ func reviewRejectCommand() *cli.Command {
 		ArgsUsage: "<proposal-id>",
 		Description: `The rejection is retained so that the same suggestion is recognizable if an
 agent proposes it again.`,
-		Flags: append(globalFlags(),
+		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "note", Usage: "why it was rejected"},
-		),
+		},
 		Action: runReviewReject,
 	}
 }
@@ -217,9 +217,9 @@ func reviewReopenCommand() *cli.Command {
 same document collides with the rejected proposal and is silently discarded.
 Reopen it when you turned it down for a reason that has since been fixed, rather
 than because the rule was wrong.`,
-		Flags: append(globalFlags(),
+		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "note", Usage: "why it is being reopened"},
-		),
+		},
 		Action: runReviewReopen,
 	}
 }
@@ -235,9 +235,9 @@ from scratch.
 Prefer "reject" for a suggestion you considered and turned down, because the
 rejection is what stops it coming back. Use this for proposals that should never
 have existed, such as ones a broken extraction produced.`,
-		Flags: append(globalFlags(),
+		Flags: []cli.Flag{
 			&cli.BoolFlag{Name: "yes", Aliases: []string{"y"}, Usage: "skip the confirmation prompt"},
-		),
+		},
 		Action: runReviewRemove,
 	}
 }
