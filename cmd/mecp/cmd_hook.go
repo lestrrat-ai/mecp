@@ -54,7 +54,7 @@ work vary with the turn, and only those are worth sending per prompt.
     "SessionStart":     [{"hooks": [{"type": "command", "command": "mecp hook --event session-start --client claude-code"}]}],
     "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "mecp hook --client claude-code"}]}]
   }}`,
-		Flags: append(globalFlags(),
+		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "client", Usage: "client profile to apply", Value: "default"},
 			&cli.StringFlag{
 				Name:  "event",
@@ -67,7 +67,7 @@ work vary with the turn, and only those are worth sending per prompt.
 			},
 			&cli.DurationFlag{Name: "timeout", Usage: "give up and stay silent after this long", Value: defaultHookTimeout},
 			&cli.BoolFlag{Name: "verbose", Usage: "report failures on stderr instead of failing silently"},
-		),
+		},
 		Action: runHook,
 	}
 }

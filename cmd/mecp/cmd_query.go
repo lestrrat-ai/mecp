@@ -36,7 +36,7 @@ func prepareCommand() *cli.Command {
 
 Use it to check what an agent will actually be told before wiring the server
 into a host, and to debug why a record did or did not apply.`,
-		Flags: append(append(globalFlags(), workspaceFlags()...),
+		Flags: append(workspaceFlags(),
 			&cli.IntFlag{Name: "budget", Usage: "approximate token budget", Value: mecp.DefaultTokenBudget},
 			&cli.BoolFlag{Name: "evidence", Usage: "include a summary of what backs each record"},
 			&cli.BoolFlag{Name: "json", Usage: "print the raw context pack"},
@@ -87,7 +87,7 @@ func searchCommand() *cli.Command {
 		Name:      "search",
 		Usage:     "search stored context",
 		ArgsUsage: "<query>",
-		Flags: append(append(globalFlags(), workspaceFlags()...),
+		Flags: append(workspaceFlags(),
 			&cli.StringSliceFlag{Name: "kind", Usage: "restrict to a record kind (repeatable)"},
 			&cli.BoolFlag{Name: "include-stale", Usage: "also show superseded and archived records"},
 			&cli.IntFlag{Name: "limit", Value: 10},

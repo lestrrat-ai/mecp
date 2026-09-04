@@ -19,10 +19,10 @@ func initCommand() *cli.Command {
 		Usage: "write a default configuration and create the database",
 		Description: `Creates config.yaml and an empty database with owner-only permissions, and
 prints the MCP server entry to add to an agent host.`,
-		Flags: append(globalFlags(),
+		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "principal", Usage: "who this store belongs to", Value: "local-user"},
 			&cli.BoolFlag{Name: "force", Usage: "overwrite an existing configuration"},
-		),
+		},
 		Action: runInit,
 	}
 }
@@ -93,7 +93,7 @@ guidance until you re-verify them with "mecp record verify".
 
 Git and content-hash policies need validation.git enabled in the configuration
 and a workspace to check against.`,
-		Flags: append(append(globalFlags(), workspaceFlags()...),
+		Flags: append(workspaceFlags(),
 			&cli.BoolFlag{Name: "apply", Usage: "mark failing records stale"},
 			&cli.BoolFlag{Name: "all", Usage: "also check records that are not currently active"},
 		),
@@ -156,14 +156,14 @@ func auditCommand() *cli.Command {
 		Usage: "show recent audit events from the configured sink",
 		Description: `Reads whichever sink "audit" names in the configuration: the SQLite audit_events
 table, or the JSONL file named by audit_log. Events are shown newest first.`,
-		Flags: append(globalFlags(),
+		Flags: []cli.Flag{
 			&cli.IntFlag{Name: "limit", Usage: "how many events to show", Value: 20},
 			&cli.BoolFlag{Name: "json", Usage: "print the raw events"},
 			&cli.StringFlag{
 				Name:  "since",
 				Usage: `drop events older than this: RFC3339, YYYY-MM-DD, or an age such as "24h"`,
 			},
-		),
+		},
 		Action: runAudit,
 	}
 }

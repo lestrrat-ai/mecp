@@ -31,7 +31,7 @@ correct individual records in the YAML afterwards.
 
 Every record keeps the original line verbatim as evidence, so a review can see
 what the parser changed.`,
-		Flags: append(globalFlags(),
+		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "out", Aliases: []string{"o"}, Usage: "write to a file instead of stdout"},
 			&cli.StringFlag{Name: "authority", Usage: "authority to claim: " + joinAuthorities(), Value: string(mecp.AuthorityImport)},
 			&cli.BoolFlag{Name: "mine", Usage: "shorthand for --authority explicit_user, for documents you wrote"},
@@ -40,7 +40,7 @@ what the parser changed.`,
 			&cli.StringSliceFlag{Name: "path", Usage: "scope every record to a path pattern (repeatable)"},
 			&cli.StringSliceFlag{Name: "task-kind", Usage: "scope every record to a task kind (repeatable)"},
 			&cli.StringSliceFlag{Name: "condition", Usage: "scope every record to a key=value condition (repeatable)"},
-		),
+		},
 		Action: runDistill,
 	}
 }

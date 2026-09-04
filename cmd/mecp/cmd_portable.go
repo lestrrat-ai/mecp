@@ -26,11 +26,11 @@ front matter.
 Imported records get sourced_import authority by default. An importer never
 assigns explicit_user authority on its own; use --authority when you are
 importing material you actually authored.`,
-		Flags: append(globalFlags(),
+		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "authority", Usage: "authority to assign to imported records", Value: string(mecp.AuthorityImport)},
 			&cli.BoolFlag{Name: "mine", Usage: `shorthand for --authority explicit_user, for material you wrote yourself`},
 			&cli.BoolFlag{Name: "dry-run", Usage: "report what would be imported without writing"},
-		),
+		},
 		Action: runImport,
 	}
 }
@@ -149,10 +149,10 @@ func exportCommand() *cli.Command {
 		Usage: "export every record as portable JSONL",
 		Description: `The export is ordered by ID and carries no index or storage detail, so two
 exports of the same data are byte-identical and a restore reproduces the store.`,
-		Flags: append(globalFlags(),
+		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "out", Aliases: []string{"o"}, Usage: "write to a file instead of stdout"},
 			&cli.BoolFlag{Name: "proposals", Usage: "include proposals and their review outcomes"},
-		),
+		},
 		Action: runExport,
 	}
 }

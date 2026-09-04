@@ -139,7 +139,15 @@ func auditLogPath(cfg *config.Config) string {
 	return config.DefaultAuditPath()
 }
 
-// globalFlags are accepted by every command.
+// globalFlags are the root command's flags. They are not Local (see the
+// urfave/cli v3 Flag.IsLocal), so every subcommand at any depth inherits them
+// automatically: the same *cli.StringFlag instance is shared down the whole
+// command tree, and whichever level actually parses "--database" or
+// "--config" out of argv sets that shared instance. That is what makes the
+// flag work whether it is given before or after the subcommand, matching the
+// GLOBAL OPTIONS billing in "mecp --help". Do not also add these flags to a
+// subcommand's own Flags list — a same-named local flag there would shadow
+// the inherited one instead of sharing it.
 func globalFlags() []cli.Flag {
 	return []cli.Flag{
 		&cli.StringFlag{
