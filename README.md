@@ -92,7 +92,7 @@ mecp record add --here --kind preference --task-kind code_review \
   "Weight implementation correctness above API compatibility before v1."
 
 # Show what an agent would actually receive.
-mecp prepare --here --task-kind code_review "Review the XMLDSig implementation"
+mecp prepare --task-kind code_review "Review the XMLDSig implementation"
 
 # Replace a decision, keeping the old one as history.
 mecp record supersede rec_abc123 "The suite now tracks upstream automatically."
@@ -211,8 +211,8 @@ The last four shell out to `git` and need `validation.git: true`. Without it the
 report `unverified`, which is a weaker claim than `stale` and is treated as one.
 
 ```sh
-mecp validate --here          # what no longer holds
-mecp validate --here --apply  # mark those stale
+mecp validate          # what no longer holds
+mecp validate --apply  # mark those stale
 mecp record verify rec_abc123 # you checked, it is still true
 ```
 
