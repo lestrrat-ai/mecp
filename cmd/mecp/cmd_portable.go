@@ -133,7 +133,7 @@ func importJSONL(ctx context.Context, rt *runtime, path string, dryRun bool) err
 	if err != nil {
 		return fmt.Errorf(`failed to open %s: %w`, path, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	n, err := source.ImportJSONL(ctx, rt.store, f)
 	if err != nil {
@@ -165,18 +165,28 @@ func runExport(ctx context.Context, cmd *cli.Command) error {
 	defer rt.Close()
 
 	out := os.Stdout
-	if path := cmd.String("out"); path != "" {
+	// Writing to stdout leaves nothing for this command to close, so the
+	// no-op keeps the export path below free of a second branch.
+	closeOut := func() error { return nil }
+	path := cmd.String("out")
+	if path != "" {
 		f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 		if err != nil {
 			return fmt.Errorf(`failed to create %s: %w`, path, err)
 		}
-		defer f.Close()
-		out = f
+		defer func() { _ = f.Close() }()
+		out, closeOut = f, f.Close
 	}
 
 	n, err := source.ExportJSONL(ctx, rt.store, out, cmd.Bool("proposals"))
 	if err != nil {
 		return err
+	}
+	// The tail of the export can sit in a buffer the kernel only flushes on
+	// close, so a close error here means the file may be short. The deferred
+	// close covers the error path above, where the export already failed.
+	if err := closeOut(); err != nil {
+		return fmt.Errorf(`failed to close %s: %w`, path, err)
 	}
 	fmt.Fprintf(os.Stderr, "%d entr(ies) exported\n", n)
 	return nil

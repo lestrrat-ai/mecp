@@ -300,7 +300,7 @@ func hasFrontMatter(path string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf(`failed to read %s: %w`, path, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	var head [8]byte
 	n, err := f.Read(head[:])

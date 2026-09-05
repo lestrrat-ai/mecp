@@ -108,10 +108,17 @@ func (a *JSONLAudit) Write(_ context.Context, ev AuditEvent) error {
 	if err != nil {
 		return wrapf(CodeStorage, err, "cannot open audit log")
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	if _, err := f.Write(append(buf, '\n')); err != nil {
 		return wrapf(CodeStorage, err, "cannot append audit event")
+	}
+	// The write above can sit in a buffer the kernel only flushes on close, so
+	// a close error here means the event may never have reached the log. The
+	// deferred close covers the error paths above, where there is nothing left
+	// to report.
+	if err := f.Close(); err != nil {
+		return wrapf(CodeStorage, err, "cannot close audit log")
 	}
 	return nil
 }
@@ -143,7 +150,7 @@ func (r *JSONLAuditReader) AuditEvents(ctx context.Context, q AuditQuery) ([]Aud
 		}
 		return nil, wrapf(CodeStorage, err, "cannot open audit log %s", r.path)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	// The file is append-ordered, so the events wanted are the last ones read.
 	// A ring of limit entries bounds what a long log costs to scan.
