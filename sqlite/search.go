@@ -8,6 +8,7 @@ import (
 	"unicode"
 
 	"github.com/lestrrat-ai/mecp"
+	"github.com/lestrrat-go/rasql/query"
 )
 
 // maxQueryTerms bounds how many tokens of a caller-supplied query reach FTS5.
@@ -20,10 +21,11 @@ const maxQueryTerms = 24
 // two-letter tokens matches most of the index.
 const minPrefixLength = 4
 
-// bm25Weights weights the indexed columns. Subject and statement carry the
-// normalized assertion, so they outweigh rationale and the verbatim evidence
-// excerpt, which is untrusted text and should not dominate ranking.
-const bm25Weights = `0.0, 5.0, 3.0, 1.5, 2.0, 0.5`
+// bm25Weights weights the indexed columns, in the column order records_fts
+// declares. Subject and statement carry the normalized assertion, so they
+// outweigh rationale and the verbatim evidence excerpt, which is untrusted text
+// and should not dominate ranking.
+var bm25Weights = []float64{0.0, 5.0, 3.0, 1.5, 2.0, 0.5}
 
 // defaultMinScore is the absolute bm25 floor a hit must clear to be returned
 // at all, regardless of how it compares to other hits in the same result set.
@@ -64,27 +66,50 @@ func (s *Store) SearchRecords(ctx context.Context, q mecp.SearchQuery) ([]mecp.S
 		return nil, nil
 	}
 
-	where, args, ok := buildWhere(q.RecordQuery)
+	filter, ok, err := buildPredicate(q.RecordQuery)
+	if err != nil {
+		return nil, err
+	}
 	if !ok {
 		return nil, nil
 	}
 
-	matchArgs := append([]any{ftsExpression(terms)}, args...)
 	limit := q.Limit
 	if limit <= 0 {
 		limit = 100
 	}
 
-	query := `SELECT ` + recordColumns + `, bm25(records_fts, ` + bm25Weights + `) AS score
-		FROM records_fts
-		JOIN records r ON r.id = records_fts.record_id
-		JOIN record_scopes sc ON sc.record_id = r.id
-		WHERE records_fts MATCH ? AND ` + strings.Join(where, " AND ") + `
-		ORDER BY score, r.id
-		LIMIT ?`
-	matchArgs = append(matchArgs, limit)
+	// The bm25 call is projected and then repeated in the ordering, because
+	// rasql orders by an expression rather than by a projection's alias.
+	score := query.BM25(recordsFTSTable, bm25Weights...)
+	statement, err := query.NewJoinedSelect(recordsFTSTable,
+		[]query.Join{
+			query.InnerJoin(recordsTable, query.Equal(recordID, ftsRecordID)),
+			query.InnerJoin(recordScopesTable, query.Equal(scopeRecordID, recordID)),
+		},
+		nil,
+		append(recordProjections(), score.As("score"))...,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(`failed to build the search query: %w`, err)
+	}
 
-	rows, err := s.db.QueryContext(ctx, query, matchArgs...)
+	match := query.Match(recordsFTSTable, ftsExpression(terms))
+	var where query.Expression = match
+	if filter != nil {
+		where = query.And(match, filter)
+	}
+	if statement, err = statement.WithWhere(where); err != nil {
+		return nil, fmt.Errorf(`failed to filter the search query: %w`, err)
+	}
+	if statement, err = statement.WithOrder(query.Asc(score), query.Asc(recordID)); err != nil {
+		return nil, fmt.Errorf(`failed to order the search query: %w`, err)
+	}
+	if statement, err = statement.WithLimit(limit); err != nil {
+		return nil, fmt.Errorf(`failed to limit the search query: %w`, err)
+	}
+
+	rows, err := querySelect(ctx, s.db, statement)
 	if err != nil {
 		return nil, fmt.Errorf(`failed to search records: %w`, err)
 	}

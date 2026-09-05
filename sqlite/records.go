@@ -10,13 +10,46 @@ import (
 	"strings"
 
 	"github.com/lestrrat-ai/mecp"
+	"github.com/lestrrat-go/rasql/query"
 )
 
-const recordColumns = `
-	r.id, r.kind, r.subject, r.statement, r.rationale, r.authority, r.status, r.confidence,
-	r.valid_from, r.valid_until, r.review_after, r.last_verified_at,
-	r.validation_policy, r.superseded_by, r.conflict_group, r.created_at, r.updated_at,
-	sc.principal, sc.org, sc.repository, sc.branch_patterns, sc.path_patterns, sc.task_kinds, sc.conditions`
+// recordProjections lists the columns a record is read from, in the order
+// scanRecord expects them. The two lists are positional, so a column added
+// here needs a destination added there.
+func recordProjections() []query.Projection {
+	return []query.Projection{
+		recordID,
+		recordsTable.Column("kind"),
+		recordsTable.Column("subject"),
+		recordsTable.Column("statement"),
+		recordsTable.Column("rationale"),
+		recordsTable.Column("authority"),
+		recordsTable.Column("status"),
+		recordsTable.Column("confidence"),
+		recordsTable.Column("valid_from"),
+		recordsTable.Column("valid_until"),
+		recordsTable.Column("review_after"),
+		recordsTable.Column("last_verified_at"),
+		recordsTable.Column("validation_policy"),
+		recordsTable.Column("superseded_by"),
+		recordsTable.Column("conflict_group"),
+		recordsTable.Column("created_at"),
+		recordUpdatedAt,
+		recordScopesTable.Column("principal"),
+		recordScopesTable.Column("org"),
+		recordScopesTable.Column("repository"),
+		recordScopesTable.Column("branch_patterns"),
+		recordScopesTable.Column("path_patterns"),
+		recordScopesTable.Column("task_kinds"),
+		recordScopesTable.Column("conditions"),
+	}
+}
+
+// scopeJoin attaches the scope row every record read needs, both for the
+// projected scope columns and for the authorization predicates.
+func scopeJoin() query.Join {
+	return query.InnerJoin(recordScopesTable, query.Equal(scopeRecordID, recordID))
+}
 
 // PutRecord inserts or replaces a record together with its scope, tags,
 // sources, relationships, and search index entry, in one transaction. A record
@@ -31,18 +64,30 @@ func (s *Store) PutRecord(ctx context.Context, rec *mecp.Record) error {
 			return err
 		}
 
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO records (
-				id, kind, subject, normalized_subject, statement, rationale, authority, status,
-				confidence, valid_from, valid_until, review_after,
-				last_verified_at, validation_policy, superseded_by, conflict_group, created_at, updated_at
-			) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			rec.ID, string(rec.Kind), rec.Subject, rec.NormalizedSubject(), rec.Statement, rec.Rationale,
-			string(rec.Authority), string(rec.Status), rec.Confidence,
-			formatTime(rec.ValidFrom), formatTimePtr(rec.ValidUntil),
-			formatTimePtr(rec.ReviewAfter), formatTimePtr(rec.LastVerifiedAt), string(rec.ValidationPolicy),
-			rec.SupersededBy, rec.ConflictGroup, formatTime(rec.CreatedAt), formatTime(rec.UpdatedAt),
-		); err != nil {
+		insert, err := query.NewInsert(recordsTable,
+			query.Set(recordID, rec.ID),
+			query.Set(recordsTable.Column("kind"), string(rec.Kind)),
+			query.Set(recordsTable.Column("subject"), rec.Subject),
+			query.Set(recordsTable.Column("normalized_subject"), rec.NormalizedSubject()),
+			query.Set(recordsTable.Column("statement"), rec.Statement),
+			query.Set(recordsTable.Column("rationale"), rec.Rationale),
+			query.Set(recordsTable.Column("authority"), string(rec.Authority)),
+			query.Set(recordsTable.Column("status"), string(rec.Status)),
+			query.Set(recordsTable.Column("confidence"), rec.Confidence),
+			query.Set(recordsTable.Column("valid_from"), formatTime(rec.ValidFrom)),
+			query.Set(recordsTable.Column("valid_until"), formatTimePtr(rec.ValidUntil)),
+			query.Set(recordsTable.Column("review_after"), formatTimePtr(rec.ReviewAfter)),
+			query.Set(recordsTable.Column("last_verified_at"), formatTimePtr(rec.LastVerifiedAt)),
+			query.Set(recordsTable.Column("validation_policy"), string(rec.ValidationPolicy)),
+			query.Set(recordsTable.Column("superseded_by"), rec.SupersededBy),
+			query.Set(recordsTable.Column("conflict_group"), rec.ConflictGroup),
+			query.Set(recordsTable.Column("created_at"), formatTime(rec.CreatedAt)),
+			query.Set(recordUpdatedAt, formatTime(rec.UpdatedAt)),
+		)
+		if err != nil {
+			return fmt.Errorf(`failed to build the record insert: %w`, err)
+		}
+		if _, err := execWrite(ctx, tx, insert); err != nil {
 			return fmt.Errorf(`failed to insert record %s: %w`, rec.ID, err)
 		}
 
@@ -80,12 +125,20 @@ func putScope(ctx context.Context, tx *sql.Tx, rec *mecp.Record) error {
 		return err
 	}
 
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO record_scopes (record_id, principal, org, repository, branch_patterns, path_patterns, task_kinds, conditions)
-		VALUES (?,?,?,?,?,?,?,?)`,
-		rec.ID, rec.Scope.User, rec.Scope.Org, rec.Scope.Repository,
-		string(branches), string(paths), string(kinds), string(conds))
+	insert, err := query.NewInsert(recordScopesTable,
+		query.Set(scopeRecordID, rec.ID),
+		query.Set(recordScopesTable.Column("principal"), rec.Scope.User),
+		query.Set(recordScopesTable.Column("org"), rec.Scope.Org),
+		query.Set(recordScopesTable.Column("repository"), rec.Scope.Repository),
+		query.Set(recordScopesTable.Column("branch_patterns"), string(branches)),
+		query.Set(recordScopesTable.Column("path_patterns"), string(paths)),
+		query.Set(recordScopesTable.Column("task_kinds"), string(kinds)),
+		query.Set(recordScopesTable.Column("conditions"), string(conds)),
+	)
 	if err != nil {
+		return fmt.Errorf(`failed to build the scope insert: %w`, err)
+	}
+	if _, err := execWrite(ctx, tx, insert); err != nil {
 		return fmt.Errorf(`failed to insert scope for record %s: %w`, rec.ID, err)
 	}
 	return nil
@@ -93,8 +146,21 @@ func putScope(ctx context.Context, tx *sql.Tx, rec *mecp.Record) error {
 
 func putTags(ctx context.Context, tx *sql.Tx, rec *mecp.Record) error {
 	for _, tag := range rec.Tags {
-		if _, err := tx.ExecContext(ctx,
-			`INSERT OR IGNORE INTO record_tags (record_id, tag) VALUES (?, ?)`, rec.ID, tag); err != nil {
+		insert, err := query.NewInsert(recordTagsTable,
+			query.Set(tagRecordID, rec.ID),
+			query.Set(tagName, tag),
+		)
+		if err != nil {
+			return fmt.Errorf(`failed to build the tag insert: %w`, err)
+		}
+		// An upsert with no assignments is ON CONFLICT DO NOTHING, which is
+		// what the tag write has always wanted: re-adding a tag a record
+		// already carries is not an error.
+		ignore, err := query.NewUpsert(insert, []query.ColumnRef{tagRecordID, tagName}, nil)
+		if err != nil {
+			return fmt.Errorf(`failed to build the tag upsert: %w`, err)
+		}
+		if _, err := execWrite(ctx, tx, ignore); err != nil {
 			return fmt.Errorf(`failed to insert tag %q for record %s: %w`, tag, rec.ID, err)
 		}
 	}
@@ -103,33 +169,78 @@ func putTags(ctx context.Context, tx *sql.Tx, rec *mecp.Record) error {
 
 func putSources(ctx context.Context, tx *sql.Tx, rec *mecp.Record) error {
 	for i, src := range rec.Sources {
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO sources (id, type, locator, revision, content_hash, exact_excerpt, captured_at, validation_policy)
-			VALUES (?,?,?,?,?,?,?,?)
-			ON CONFLICT(id) DO UPDATE SET
-				type = excluded.type, locator = excluded.locator, revision = excluded.revision,
-				content_hash = excluded.content_hash, exact_excerpt = excluded.exact_excerpt,
-				captured_at = excluded.captured_at,
-				validation_policy = excluded.validation_policy`,
-			src.ID, string(src.Type), src.Locator, src.Revision, src.ContentHash, src.ExactExcerpt,
-			formatTime(src.CapturedAt), string(src.ValidationPolicy),
-		); err != nil {
+		insert, err := query.NewInsert(sourcesTable,
+			query.Set(sourceID, src.ID),
+			query.Set(sourcesTable.Column("type"), string(src.Type)),
+			query.Set(sourcesTable.Column("locator"), src.Locator),
+			query.Set(sourcesTable.Column("revision"), src.Revision),
+			query.Set(sourcesTable.Column("content_hash"), src.ContentHash),
+			query.Set(sourcesTable.Column("exact_excerpt"), src.ExactExcerpt),
+			query.Set(sourcesTable.Column("captured_at"), formatTime(src.CapturedAt)),
+			query.Set(sourcesTable.Column("validation_policy"), string(src.ValidationPolicy)),
+		)
+		if err != nil {
+			return fmt.Errorf(`failed to build the source insert: %w`, err)
+		}
+		upsert, err := query.NewUpsert(insert, []query.ColumnRef{sourceID}, sourceUpsertAssignments())
+		if err != nil {
+			return fmt.Errorf(`failed to build the source upsert: %w`, err)
+		}
+		if _, err := execWrite(ctx, tx, upsert); err != nil {
 			return fmt.Errorf(`failed to insert source %s: %w`, src.ID, err)
 		}
-		if _, err := tx.ExecContext(ctx,
-			`INSERT OR REPLACE INTO record_sources (record_id, source_id, position) VALUES (?,?,?)`,
-			rec.ID, src.ID, i); err != nil {
+
+		position := recordSourcesTable.Column("position")
+		link, err := query.NewInsert(recordSourcesTable,
+			query.Set(recordSourceRecID, rec.ID),
+			query.Set(recordSourceSrcID, src.ID),
+			query.Set(position, i),
+		)
+		if err != nil {
+			return fmt.Errorf(`failed to build the source link insert: %w`, err)
+		}
+		relink, err := query.NewUpsert(link,
+			[]query.ColumnRef{recordSourceRecID, recordSourceSrcID},
+			[]query.Assignment{query.Set(position, query.Excluded(position))},
+		)
+		if err != nil {
+			return fmt.Errorf(`failed to build the source link upsert: %w`, err)
+		}
+		if _, err := execWrite(ctx, tx, relink); err != nil {
 			return fmt.Errorf(`failed to link source %s to record %s: %w`, src.ID, rec.ID, err)
 		}
 	}
 	return nil
 }
 
+// sourceUpsertAssignments refreshes every mutable column of a source from the
+// row being written, so a source captured again replaces what was stored.
+func sourceUpsertAssignments() []query.Assignment {
+	names := []string{"type", "locator", "revision", "content_hash", "exact_excerpt", "captured_at", "validation_policy"}
+	out := make([]query.Assignment, 0, len(names))
+	for _, name := range names {
+		column := sourcesTable.Column(name)
+		out = append(out, query.Set(column, query.Excluded(column)))
+	}
+	return out
+}
+
 func putRelationships(ctx context.Context, tx *sql.Tx, rec *mecp.Record) error {
 	for _, target := range rec.Supersedes {
-		if _, err := tx.ExecContext(ctx,
-			`INSERT OR IGNORE INTO record_relationships (from_record_id, to_record_id, kind) VALUES (?,?, 'supersedes')`,
-			rec.ID, target); err != nil {
+		insert, err := query.NewInsert(recordRelationshipsTable,
+			query.Set(relationshipFrom, rec.ID),
+			query.Set(relationshipTo, target),
+			query.Set(relationshipKind, supersedesKind),
+		)
+		if err != nil {
+			return fmt.Errorf(`failed to build the supersession insert: %w`, err)
+		}
+		ignore, err := query.NewUpsert(insert,
+			[]query.ColumnRef{relationshipFrom, relationshipTo, relationshipKind}, nil)
+		if err != nil {
+			return fmt.Errorf(`failed to build the supersession upsert: %w`, err)
+		}
+		if _, err := execWrite(ctx, tx, ignore); err != nil {
 			return fmt.Errorf(`failed to record supersession %s -> %s: %w`, rec.ID, target, err)
 		}
 	}
@@ -142,11 +253,18 @@ func putFTS(ctx context.Context, tx *sql.Tx, rec *mecp.Record) error {
 		evidence.WriteString(src.ExactExcerpt)
 		evidence.WriteByte('\n')
 	}
-	_, err := tx.ExecContext(ctx, `
-		INSERT INTO records_fts (record_id, subject, statement, rationale, tags, evidence)
-		VALUES (?,?,?,?,?,?)`,
-		rec.ID, rec.Subject, rec.Statement, rec.Rationale, strings.Join(rec.Tags, " "), evidence.String())
+	insert, err := query.NewInsert(recordsFTSTable,
+		query.Set(ftsRecordID, rec.ID),
+		query.Set(recordsFTSTable.Column("subject"), rec.Subject),
+		query.Set(recordsFTSTable.Column("statement"), rec.Statement),
+		query.Set(recordsFTSTable.Column("rationale"), rec.Rationale),
+		query.Set(recordsFTSTable.Column("tags"), strings.Join(rec.Tags, " ")),
+		query.Set(recordsFTSTable.Column("evidence"), evidence.String()),
+	)
 	if err != nil {
+		return fmt.Errorf(`failed to build the index insert: %w`, err)
+	}
+	if _, err := execWrite(ctx, tx, insert); err != nil {
 		return fmt.Errorf(`failed to index record %s: %w`, rec.ID, err)
 	}
 	return nil
@@ -156,21 +274,38 @@ func putFTS(ctx context.Context, tx *sql.Tx, rec *mecp.Record) error {
 // entry and any source rows no other record still references. "Delete" has to
 // mean the record stops being retrievable, not merely hidden.
 func deleteRecordRows(ctx context.Context, tx *sql.Tx, id string) error {
-	stmts := []string{
-		`DELETE FROM records_fts WHERE record_id = ?`,
-		`DELETE FROM record_sources WHERE record_id = ?`,
-		`DELETE FROM record_tags WHERE record_id = ?`,
-		`DELETE FROM record_relationships WHERE from_record_id = ?`,
-		`DELETE FROM record_scopes WHERE record_id = ?`,
-		`DELETE FROM records WHERE id = ?`,
+	owned := []struct {
+		table  query.TableRef
+		column query.ColumnRef
+	}{
+		{recordsFTSTable, ftsRecordID},
+		{recordSourcesTable, recordSourceRecID},
+		{recordTagsTable, tagRecordID},
+		{recordRelationshipsTable, relationshipFrom},
+		{recordScopesTable, scopeRecordID},
+		{recordsTable, recordID},
 	}
-	for _, stmt := range stmts {
-		if _, err := tx.ExecContext(ctx, stmt, id); err != nil {
+	for _, target := range owned {
+		statement, err := deleteWhere(target.table, query.Equal(target.column, id))
+		if err != nil {
+			return fmt.Errorf(`failed to build the delete for record %s: %w`, id, err)
+		}
+		if _, err := execWrite(ctx, tx, statement); err != nil {
 			return fmt.Errorf(`failed to clear record %s: %w`, id, err)
 		}
 	}
-	if _, err := tx.ExecContext(ctx,
-		`DELETE FROM sources WHERE id NOT IN (SELECT source_id FROM record_sources)`); err != nil {
+
+	// A source row survives only while some record still links to it, so the
+	// sources nothing links to any more go with the record that cited them.
+	linked, err := query.NewSelect(recordSourcesTable, recordSourceSrcID)
+	if err != nil {
+		return fmt.Errorf(`failed to build the orphan subquery: %w`, err)
+	}
+	orphans, err := deleteWhere(sourcesTable, query.NotInSelect(sourceID, linked))
+	if err != nil {
+		return fmt.Errorf(`failed to build the orphan delete: %w`, err)
+	}
+	if _, err := execWrite(ctx, tx, orphans); err != nil {
 		return fmt.Errorf(`failed to remove orphaned sources: %w`, err)
 	}
 	return nil
@@ -179,8 +314,16 @@ func deleteRecordRows(ctx context.Context, tx *sql.Tx, id string) error {
 // DeleteRecord removes a record permanently.
 func (s *Store) DeleteRecord(ctx context.Context, id string) error {
 	return s.withTx(ctx, func(tx *sql.Tx) error {
+		count, err := selectWhere(recordsTable, query.Equal(recordID, id), query.CountAll().As("n"))
+		if err != nil {
+			return fmt.Errorf(`failed to build the record count: %w`, err)
+		}
+		rows, err := querySelect(ctx, tx, count)
+		if err != nil {
+			return err
+		}
 		var exists int
-		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM records WHERE id = ?`, id).Scan(&exists); err != nil {
+		if err := scanOne(rows, &exists); err != nil {
 			return err
 		}
 		if exists == 0 {
@@ -191,7 +334,11 @@ func (s *Store) DeleteRecord(ctx context.Context, id string) error {
 		}
 		// A dangling supersession edge would make a live record look superseded
 		// by a record that no longer exists.
-		_, err := tx.ExecContext(ctx, `DELETE FROM record_relationships WHERE to_record_id = ?`, id)
+		dangling, err := deleteWhere(recordRelationshipsTable, query.Equal(relationshipTo, id))
+		if err != nil {
+			return fmt.Errorf(`failed to build the supersession cleanup: %w`, err)
+		}
+		_, err = execWrite(ctx, tx, dangling)
 		return err
 	})
 }
@@ -213,25 +360,21 @@ func (s *Store) GetRecord(ctx context.Context, id string) (*mecp.Record, error) 
 // is applied here in SQL, so an unauthorized row never reaches the caller,
 // a result count, or the ranking stage.
 func (s *Store) QueryRecords(ctx context.Context, q mecp.RecordQuery) ([]*mecp.Record, error) {
-	where, args, ok := buildWhere(q)
+	statement, ok, err := recordSelect(q)
+	if err != nil {
+		return nil, err
+	}
 	if !ok {
 		return nil, nil
 	}
-
-	query := `SELECT ` + recordColumns + `
-		FROM records r JOIN record_scopes sc ON sc.record_id = r.id
-		WHERE ` + strings.Join(where, " AND ") + `
-		ORDER BY r.id`
-	if q.Limit > 0 {
-		query += ` LIMIT ?`
-		args = append(args, q.Limit)
-		if q.Offset > 0 {
-			query += ` OFFSET ?`
-			args = append(args, q.Offset)
-		}
+	if statement, err = statement.WithOrder(query.Asc(recordID)); err != nil {
+		return nil, fmt.Errorf(`failed to order the record query: %w`, err)
+	}
+	if statement, err = withPaging(statement, q.Limit, q.Offset); err != nil {
+		return nil, fmt.Errorf(`failed to page the record query: %w`, err)
 	}
 
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := querySelect(ctx, s.db, statement)
 	if err != nil {
 		return nil, fmt.Errorf(`failed to query records: %w`, err)
 	}
@@ -244,62 +387,120 @@ func (s *Store) QueryRecords(ctx context.Context, q mecp.RecordQuery) ([]*mecp.R
 	return s.hydrate(ctx, recs)
 }
 
-// buildWhere renders the structured filter. The boolean reports whether the
-// filter can match anything at all; a filter that cannot is answered without
-// touching the database.
-func buildWhere(q mecp.RecordQuery) ([]string, []any, bool) {
-	where := []string{"1=1"}
-	var args []any
+// recordSelect builds the joined select every structured record read starts
+// from, already carrying the filter. The boolean reports whether the filter can
+// match anything at all; a filter that cannot is answered without touching the
+// database.
+func recordSelect(q mecp.RecordQuery) (query.Select, bool, error) {
+	where, ok, err := buildPredicate(q)
+	if err != nil {
+		return query.Select{}, false, err
+	}
+	if !ok {
+		return query.Select{}, false, nil
+	}
+	statement, err := query.NewJoinedSelect(recordsTable, []query.Join{scopeJoin()}, nil, recordProjections()...)
+	if err != nil {
+		return query.Select{}, false, fmt.Errorf(`failed to build the record query: %w`, err)
+	}
+	if where == nil {
+		return statement, true, nil
+	}
+	statement, err = statement.WithWhere(where)
+	if err != nil {
+		return query.Select{}, false, fmt.Errorf(`failed to filter the record query: %w`, err)
+	}
+	return statement, true, nil
+}
+
+// buildPredicate turns the structured filter into one expression tree. It
+// returns a nil expression when the filter constrains nothing, and false when
+// the filter cannot match anything at all.
+func buildPredicate(q mecp.RecordQuery) (query.Expression, bool, error) {
+	var where []query.Expression
+
+	principal := recordScopesTable.Column("principal")
+	repository := recordScopesTable.Column("repository")
 
 	if q.PrincipalID != "" {
-		where = append(where, `(sc.principal = '' OR sc.principal = ?)`)
-		args = append(args, q.PrincipalID)
+		where = append(where, query.Or(
+			query.Equal(principal, ""),
+			query.Equal(principal, q.PrincipalID),
+		))
 	}
 	if q.RestrictRepositories {
 		switch {
 		case len(q.Repositories) > 0 && q.AllowGlobal:
-			where = append(where, `(sc.repository = '' OR sc.repository IN (`+placeholders(len(q.Repositories))+`))`)
-			args = append(args, toAny(q.Repositories)...)
+			where = append(where, query.Or(
+				query.Equal(repository, ""),
+				query.In(repository, toAny(q.Repositories)...),
+			))
 		case len(q.Repositories) > 0:
-			where = append(where, `sc.repository IN (`+placeholders(len(q.Repositories))+`)`)
-			args = append(args, toAny(q.Repositories)...)
+			where = append(where, query.In(repository, toAny(q.Repositories)...))
 		case q.AllowGlobal:
-			where = append(where, `sc.repository = ''`)
+			where = append(where, query.Equal(repository, ""))
 		default:
-			return nil, nil, false
+			return nil, false, nil
 		}
 	}
 	if len(q.Kinds) > 0 {
-		where = append(where, `r.kind IN (`+placeholders(len(q.Kinds))+`)`)
-		for _, k := range q.Kinds {
-			args = append(args, string(k))
-		}
+		where = append(where, query.In(recordsTable.Column("kind"), toAny(q.Kinds)...))
 	}
 	if len(q.Statuses) > 0 {
-		where = append(where, `r.status IN (`+placeholders(len(q.Statuses))+`)`)
-		for _, st := range q.Statuses {
-			args = append(args, string(st))
-		}
+		where = append(where, query.In(recordsTable.Column("status"), toAny(q.Statuses)...))
 	}
 	if len(q.IDs) > 0 {
-		where = append(where, `r.id IN (`+placeholders(len(q.IDs))+`)`)
-		args = append(args, toAny(q.IDs)...)
+		where = append(where, query.In(recordID, toAny(q.IDs)...))
 	}
 	if q.Subject != "" {
-		where = append(where, `r.normalized_subject = ?`)
-		args = append(args, strings.ToLower(strings.Join(strings.Fields(q.Subject), " ")))
+		normalized := strings.ToLower(strings.Join(strings.Fields(q.Subject), " "))
+		where = append(where, query.Equal(recordsTable.Column("normalized_subject"), normalized))
 	}
 	if len(q.Tags) > 0 {
-		where = append(where,
-			`EXISTS (SELECT 1 FROM record_tags t WHERE t.record_id = r.id AND t.tag IN (`+placeholders(len(q.Tags))+`))`)
-		args = append(args, toAny(q.Tags)...)
+		tagged, err := taggedWith(q.Tags)
+		if err != nil {
+			return nil, false, err
+		}
+		where = append(where, tagged)
 	}
 	if !q.At.IsZero() {
 		at := formatTime(q.At)
-		where = append(where, `r.valid_from <= ?`, `(r.valid_until IS NULL OR r.valid_until > ?)`)
-		args = append(args, at, at)
+		validUntil := recordsTable.Column("valid_until")
+		where = append(where,
+			query.LessThanOrEqual(recordsTable.Column("valid_from"), at),
+			query.Or(query.IsNull(validUntil), query.GreaterThan(validUntil, at)),
+		)
 	}
-	return where, args, true
+
+	switch len(where) {
+	case 0:
+		return nil, true, nil
+	case 1:
+		return where[0], true, nil
+	default:
+		return query.And(where...), true, nil
+	}
+}
+
+// taggedWith matches a record carrying any of the given tags. The subquery
+// reads records.id, so it is correlated: WithCorrelation names that enclosing
+// table, and has to come before the WithWhere that reads it.
+func taggedWith(tags []string) (query.Expression, error) {
+	inner, err := query.NewSelect(recordTagsTable, tagRecordID)
+	if err != nil {
+		return nil, fmt.Errorf(`failed to build the tag filter: %w`, err)
+	}
+	if inner, err = inner.WithCorrelation(recordsTable); err != nil {
+		return nil, fmt.Errorf(`failed to correlate the tag filter: %w`, err)
+	}
+	inner, err = inner.WithWhere(query.And(
+		query.Equal(tagRecordID, recordID),
+		query.In(tagName, toAny(tags)...),
+	))
+	if err != nil {
+		return nil, fmt.Errorf(`failed to filter the tag subquery: %w`, err)
+	}
+	return query.Exists(inner), nil
 }
 
 func scanRecords(rows *sql.Rows) ([]*mecp.Record, error) {
@@ -401,8 +602,14 @@ func (s *Store) hydrate(ctx context.Context, recs []*mecp.Record) ([]*mecp.Recor
 		ids = append(ids, rec.ID)
 	}
 
-	tagRows, err := s.db.QueryContext(ctx,
-		`SELECT record_id, tag FROM record_tags WHERE record_id IN (`+placeholders(len(ids))+`) ORDER BY record_id, tag`, ids...)
+	tagQuery, err := selectWhere(recordTagsTable, query.In(tagRecordID, ids...), tagRecordID, tagName)
+	if err != nil {
+		return nil, fmt.Errorf(`failed to build the tag query: %w`, err)
+	}
+	if tagQuery, err = tagQuery.WithOrder(query.Asc(tagRecordID), query.Asc(tagName)); err != nil {
+		return nil, fmt.Errorf(`failed to order the tag query: %w`, err)
+	}
+	tagRows, err := querySelect(ctx, s.db, tagQuery)
 	if err != nil {
 		return nil, fmt.Errorf(`failed to load tags: %w`, err)
 	}
@@ -417,12 +624,30 @@ func (s *Store) hydrate(ctx context.Context, recs []*mecp.Record) ([]*mecp.Recor
 		return nil, err
 	}
 
-	srcRows, err := s.db.QueryContext(ctx, `
-		SELECT rs.record_id, s.id, s.type, s.locator, s.revision, s.content_hash, s.exact_excerpt,
-		       s.captured_at, s.validation_policy
-		FROM record_sources rs JOIN sources s ON s.id = rs.source_id
-		WHERE rs.record_id IN (`+placeholders(len(ids))+`)
-		ORDER BY rs.record_id, rs.position`, ids...)
+	position := recordSourcesTable.Column("position")
+	srcQuery, err := query.NewJoinedSelect(recordSourcesTable,
+		[]query.Join{query.InnerJoin(sourcesTable, query.Equal(sourceID, recordSourceSrcID))},
+		nil,
+		recordSourceRecID,
+		sourceID,
+		sourcesTable.Column("type"),
+		sourcesTable.Column("locator"),
+		sourcesTable.Column("revision"),
+		sourcesTable.Column("content_hash"),
+		sourcesTable.Column("exact_excerpt"),
+		sourcesTable.Column("captured_at"),
+		sourcesTable.Column("validation_policy"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf(`failed to build the source query: %w`, err)
+	}
+	if srcQuery, err = srcQuery.WithWhere(query.In(recordSourceRecID, ids...)); err != nil {
+		return nil, fmt.Errorf(`failed to filter the source query: %w`, err)
+	}
+	if srcQuery, err = srcQuery.WithOrder(query.Asc(recordSourceRecID), query.Asc(position)); err != nil {
+		return nil, fmt.Errorf(`failed to order the source query: %w`, err)
+	}
+	srcRows, err := querySelect(ctx, s.db, srcQuery)
 	if err != nil {
 		return nil, fmt.Errorf(`failed to load sources: %w`, err)
 	}
@@ -448,10 +673,19 @@ func (s *Store) hydrate(ctx context.Context, recs []*mecp.Record) ([]*mecp.Recor
 		return nil, err
 	}
 
-	relRows, err := s.db.QueryContext(ctx, `
-		SELECT from_record_id, to_record_id FROM record_relationships
-		WHERE kind = 'supersedes' AND from_record_id IN (`+placeholders(len(ids))+`)
-		ORDER BY from_record_id, to_record_id`, ids...)
+	relQuery, err := selectWhere(recordRelationshipsTable,
+		query.And(
+			query.Equal(relationshipKind, supersedesKind),
+			query.In(relationshipFrom, ids...),
+		),
+		relationshipFrom, relationshipTo)
+	if err != nil {
+		return nil, fmt.Errorf(`failed to build the supersession query: %w`, err)
+	}
+	if relQuery, err = relQuery.WithOrder(query.Asc(relationshipFrom), query.Asc(relationshipTo)); err != nil {
+		return nil, fmt.Errorf(`failed to order the supersession query: %w`, err)
+	}
+	relRows, err := querySelect(ctx, s.db, relQuery)
 	if err != nil {
 		return nil, fmt.Errorf(`failed to load relationships: %w`, err)
 	}
@@ -474,11 +708,19 @@ func (s *Store) SupersededBy(ctx context.Context, ids []string) (map[string][]st
 	if len(ids) == 0 {
 		return map[string][]string{}, nil
 	}
-	args := toAny(ids)
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT to_record_id, from_record_id FROM record_relationships
-		WHERE kind = 'supersedes' AND to_record_id IN (`+placeholders(len(args))+`)
-		ORDER BY to_record_id, from_record_id`, args...)
+	statement, err := selectWhere(recordRelationshipsTable,
+		query.And(
+			query.Equal(relationshipKind, supersedesKind),
+			query.In(relationshipTo, toAny(ids)...),
+		),
+		relationshipTo, relationshipFrom)
+	if err != nil {
+		return nil, fmt.Errorf(`failed to build the supersession query: %w`, err)
+	}
+	if statement, err = statement.WithOrder(query.Asc(relationshipTo), query.Asc(relationshipFrom)); err != nil {
+		return nil, fmt.Errorf(`failed to order the supersession query: %w`, err)
+	}
+	rows, err := querySelect(ctx, s.db, statement)
 	if err != nil {
 		return nil, fmt.Errorf(`failed to load supersession: %w`, err)
 	}
@@ -542,8 +784,18 @@ func IsNotFound(err error) bool { return errors.Is(err, mecp.ErrNotFound) }
 // KnownRepositories returns every canonical repository some record is scoped
 // to, sorted and without duplicates.
 func (s *Store) KnownRepositories(ctx context.Context) ([]string, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT DISTINCT repository FROM record_scopes WHERE repository != '' ORDER BY repository`)
+	repository := recordScopesTable.Column("repository")
+	statement, err := selectWhere(recordScopesTable, query.NotEqual(repository, ""), repository)
+	if err != nil {
+		return nil, fmt.Errorf(`failed to build the repository query: %w`, err)
+	}
+	if statement, err = statement.WithDistinct(); err != nil {
+		return nil, fmt.Errorf(`failed to build the repository query: %w`, err)
+	}
+	if statement, err = statement.WithOrder(query.Asc(repository)); err != nil {
+		return nil, fmt.Errorf(`failed to order the repository query: %w`, err)
+	}
+	rows, err := querySelect(ctx, s.db, statement)
 	if err != nil {
 		return nil, fmt.Errorf(`failed to list repositories: %w`, err)
 	}
