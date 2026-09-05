@@ -23,7 +23,7 @@ jobs:
       - uses: actions/checkout@v5
       # go-version-file keeps the toolchain tied to go.mod. The module needs
       # the version go.mod names, so there is nothing older to matrix over.
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           check-latest: true
@@ -43,7 +43,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           check-latest: true
