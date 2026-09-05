@@ -4,15 +4,79 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/lestrrat-ai/mecp"
+	"github.com/lestrrat-go/rasql/query"
 )
 
-const proposalColumns = `
-	id, proposal_key, status, principal_id, client_id, kind, subject, statement, rationale,
-	scope, tags, supersedes_record_ids, created_at, decided_at, decided_by, decision_note, result_record_id`
+// proposalProjections lists the columns a proposal is read from, in the order
+// scanProposal expects them. The two lists are positional, so a column added
+// here needs a destination added there.
+func proposalProjections() []query.Projection {
+	return []query.Projection{
+		proposalID,
+		proposalsTable.Column("proposal_key"),
+		proposalsTable.Column("status"),
+		proposalsTable.Column("principal_id"),
+		proposalsTable.Column("client_id"),
+		proposalsTable.Column("kind"),
+		proposalsTable.Column("subject"),
+		proposalsTable.Column("statement"),
+		proposalsTable.Column("rationale"),
+		proposalsTable.Column("scope"),
+		proposalsTable.Column("tags"),
+		proposalsTable.Column("supersedes_record_ids"),
+		proposalsTable.Column("created_at"),
+		proposalsTable.Column("decided_at"),
+		proposalsTable.Column("decided_by"),
+		proposalsTable.Column("decision_note"),
+		proposalsTable.Column("result_record_id"),
+	}
+}
+
+// oneProposal reads the single proposal matching where, reporting
+// sql.ErrNoRows when there is none. Callers turn that into whichever answer
+// suits them, so the two lookups below keep their differing behavior.
+func (s *Store) oneProposal(ctx context.Context, where query.Expression) (*mecp.Proposal, error) {
+	p, err := s.firstProposal(ctx, where)
+	if err != nil {
+		return nil, err
+	}
+	// Hydration runs only once firstProposal's rows are closed. A writable
+	// store is capped at one connection, so a second query issued while the
+	// first result set is still open waits for a connection that result set
+	// holds, and neither ever finishes.
+	if err := s.hydrateProposals(ctx, []*mecp.Proposal{p}); err != nil {
+		return nil, err
+	}
+	return p, nil
+}
+
+func (s *Store) firstProposal(ctx context.Context, where query.Expression) (*mecp.Proposal, error) {
+	statement, err := selectWhere(proposalsTable, where, proposalProjections()...)
+	if err != nil {
+		return nil, fmt.Errorf(`failed to build the proposal query: %w`, err)
+	}
+	rows, err := querySelect(ctx, s.db, statement)
+	if err != nil {
+		return nil, fmt.Errorf(`failed to query proposal: %w`, err)
+	}
+	defer rows.Close()
+
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+		return nil, sql.ErrNoRows
+	}
+	p, err := scanProposal(rows)
+	if err != nil {
+		return nil, err
+	}
+	return p, rows.Err()
+}
 
 // PutProposal stores a proposal. The proposal key provides idempotency: an
 // agent that retries a tool call gets the existing proposal back instead of
@@ -40,15 +104,29 @@ func (s *Store) PutProposal(ctx context.Context, p *mecp.Proposal) (*mecp.Propos
 	}
 
 	err = s.withTx(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO proposals (
-				id, proposal_key, status, principal_id, client_id, kind, subject, statement, rationale,
-				scope, tags, supersedes_record_ids, created_at, decided_at, decided_by, decision_note, result_record_id
-			) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			p.ID, p.Key, string(p.Status), p.PrincipalID, p.ClientID, string(p.Kind), p.Subject,
-			p.Statement, p.Rationale, string(scope), string(tags), string(supersedes),
-			formatTime(p.CreatedAt), formatTimePtr(p.DecidedAt), p.DecidedBy, p.DecisionNote, p.ResultRecordID,
-		); err != nil {
+		insert, err := query.NewInsert(proposalsTable,
+			query.Set(proposalID, p.ID),
+			query.Set(proposalsTable.Column("proposal_key"), p.Key),
+			query.Set(proposalsTable.Column("status"), string(p.Status)),
+			query.Set(proposalsTable.Column("principal_id"), p.PrincipalID),
+			query.Set(proposalsTable.Column("client_id"), p.ClientID),
+			query.Set(proposalsTable.Column("kind"), string(p.Kind)),
+			query.Set(proposalsTable.Column("subject"), p.Subject),
+			query.Set(proposalsTable.Column("statement"), p.Statement),
+			query.Set(proposalsTable.Column("rationale"), p.Rationale),
+			query.Set(proposalsTable.Column("scope"), string(scope)),
+			query.Set(proposalsTable.Column("tags"), string(tags)),
+			query.Set(proposalsTable.Column("supersedes_record_ids"), string(supersedes)),
+			query.Set(proposalsTable.Column("created_at"), formatTime(p.CreatedAt)),
+			query.Set(proposalsTable.Column("decided_at"), formatTimePtr(p.DecidedAt)),
+			query.Set(proposalsTable.Column("decided_by"), p.DecidedBy),
+			query.Set(proposalsTable.Column("decision_note"), p.DecisionNote),
+			query.Set(proposalsTable.Column("result_record_id"), p.ResultRecordID),
+		)
+		if err != nil {
+			return fmt.Errorf(`failed to build the proposal insert: %w`, err)
+		}
+		if _, err := execWrite(ctx, tx, insert); err != nil {
 			return fmt.Errorf(`failed to insert proposal: %w`, err)
 		}
 		for i, ev := range p.Evidence {
@@ -56,9 +134,15 @@ func (s *Store) PutProposal(ctx context.Context, p *mecp.Proposal) (*mecp.Propos
 			if err != nil {
 				return err
 			}
-			if _, err := tx.ExecContext(ctx,
-				`INSERT INTO proposal_sources (proposal_id, position, payload) VALUES (?,?,?)`,
-				p.ID, i, string(payload)); err != nil {
+			evidence, err := query.NewInsert(proposalSourcesTable,
+				query.Set(proposalEvidenceID, p.ID),
+				query.Set(proposalSourcesTable.Column("position"), i),
+				query.Set(proposalSourcesTable.Column("payload"), string(payload)),
+			)
+			if err != nil {
+				return fmt.Errorf(`failed to build the proposal evidence insert: %w`, err)
+			}
+			if _, err := execWrite(ctx, tx, evidence); err != nil {
 				return fmt.Errorf(`failed to insert proposal evidence: %w`, err)
 			}
 		}
@@ -71,15 +155,11 @@ func (s *Store) PutProposal(ctx context.Context, p *mecp.Proposal) (*mecp.Propos
 }
 
 func (s *Store) proposalByKey(ctx context.Context, key string) (*mecp.Proposal, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT `+proposalColumns+` FROM proposals WHERE proposal_key = ?`, key)
-	p, err := scanProposal(row)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil
-		}
-		return nil, err
+	p, err := s.oneProposal(ctx, query.Equal(proposalsTable.Column("proposal_key"), key))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
 	}
-	if err := s.hydrateProposals(ctx, []*mecp.Proposal{p}); err != nil {
+	if err != nil {
 		return nil, err
 	}
 	return p, nil
@@ -87,15 +167,11 @@ func (s *Store) proposalByKey(ctx context.Context, key string) (*mecp.Proposal, 
 
 // GetProposal returns one proposal by ID.
 func (s *Store) GetProposal(ctx context.Context, id string) (*mecp.Proposal, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT `+proposalColumns+` FROM proposals WHERE id = ?`, id)
-	p, err := scanProposal(row)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, mecp.ErrNotFound
-		}
-		return nil, err
+	p, err := s.oneProposal(ctx, query.Equal(proposalID, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, mecp.ErrNotFound
 	}
-	if err := s.hydrateProposals(ctx, []*mecp.Proposal{p}); err != nil {
+	if err != nil {
 		return nil, err
 	}
 	return p, nil
@@ -105,10 +181,20 @@ func (s *Store) GetProposal(ctx context.Context, id string) (*mecp.Proposal, err
 // filed, so only the review fields are updated.
 func (s *Store) UpdateProposal(ctx context.Context, p *mecp.Proposal) error {
 	return s.withTx(ctx, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, `
-			UPDATE proposals SET status = ?, decided_at = ?, decided_by = ?, decision_note = ?, result_record_id = ?
-			WHERE id = ?`,
-			string(p.Status), formatTimePtr(p.DecidedAt), p.DecidedBy, p.DecisionNote, p.ResultRecordID, p.ID)
+		update, err := query.NewUpdate(proposalsTable,
+			query.Set(proposalsTable.Column("status"), string(p.Status)),
+			query.Set(proposalsTable.Column("decided_at"), formatTimePtr(p.DecidedAt)),
+			query.Set(proposalsTable.Column("decided_by"), p.DecidedBy),
+			query.Set(proposalsTable.Column("decision_note"), p.DecisionNote),
+			query.Set(proposalsTable.Column("result_record_id"), p.ResultRecordID),
+		)
+		if err != nil {
+			return fmt.Errorf(`failed to build the proposal update: %w`, err)
+		}
+		if update, err = update.WithWhere(query.Equal(proposalID, p.ID)); err != nil {
+			return fmt.Errorf(`failed to filter the proposal update: %w`, err)
+		}
+		res, err := execWrite(ctx, tx, update)
 		if err != nil {
 			return fmt.Errorf(`failed to update proposal %s: %w`, p.ID, err)
 		}
@@ -125,30 +211,36 @@ func (s *Store) UpdateProposal(ctx context.Context, p *mecp.Proposal) error {
 
 // QueryProposals lists proposals matching a filter, newest first.
 func (s *Store) QueryProposals(ctx context.Context, q mecp.ProposalQuery) ([]*mecp.Proposal, error) {
-	where := []string{"1=1"}
-	var args []any
-
+	var where []query.Expression
 	if q.PrincipalID != "" {
-		where = append(where, `principal_id = ?`)
-		args = append(args, q.PrincipalID)
+		where = append(where, query.Equal(proposalsTable.Column("principal_id"), q.PrincipalID))
 	}
 	if len(q.Statuses) > 0 {
-		where = append(where, `status IN (`+placeholders(len(q.Statuses))+`)`)
-		args = append(args, toAny(q.Statuses)...)
+		where = append(where, query.In(proposalsTable.Column("status"), toAny(q.Statuses)...))
 	}
 
-	query := `SELECT ` + proposalColumns + ` FROM proposals WHERE ` + strings.Join(where, " AND ") +
-		` ORDER BY created_at DESC, id DESC`
-	if q.Limit > 0 {
-		query += ` LIMIT ?`
-		args = append(args, q.Limit)
-		if q.Offset > 0 {
-			query += ` OFFSET ?`
-			args = append(args, q.Offset)
-		}
+	var filter query.Expression
+	switch len(where) {
+	case 0:
+	case 1:
+		filter = where[0]
+	default:
+		filter = query.And(where...)
 	}
 
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	statement, err := selectWhere(proposalsTable, filter, proposalProjections()...)
+	if err != nil {
+		return nil, fmt.Errorf(`failed to build the proposal query: %w`, err)
+	}
+	createdAt := proposalsTable.Column("created_at")
+	if statement, err = statement.WithOrder(query.Desc(createdAt), query.Desc(proposalID)); err != nil {
+		return nil, fmt.Errorf(`failed to order the proposal query: %w`, err)
+	}
+	if statement, err = withPaging(statement, q.Limit, q.Offset); err != nil {
+		return nil, fmt.Errorf(`failed to page the proposal query: %w`, err)
+	}
+
+	rows, err := querySelect(ctx, s.db, statement)
 	if err != nil {
 		return nil, fmt.Errorf(`failed to query proposals: %w`, err)
 	}
@@ -219,9 +311,16 @@ func (s *Store) hydrateProposals(ctx context.Context, ps []*mecp.Proposal) error
 		ids = append(ids, p.ID)
 	}
 
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT proposal_id, payload FROM proposal_sources WHERE proposal_id IN (`+placeholders(len(ids))+`) ORDER BY proposal_id, position`,
-		ids...)
+	position := proposalSourcesTable.Column("position")
+	statement, err := selectWhere(proposalSourcesTable, query.In(proposalEvidenceID, ids...),
+		proposalEvidenceID, proposalSourcesTable.Column("payload"))
+	if err != nil {
+		return fmt.Errorf(`failed to build the proposal evidence query: %w`, err)
+	}
+	if statement, err = statement.WithOrder(query.Asc(proposalEvidenceID), query.Asc(position)); err != nil {
+		return fmt.Errorf(`failed to order the proposal evidence query: %w`, err)
+	}
+	rows, err := querySelect(ctx, s.db, statement)
 	if err != nil {
 		return fmt.Errorf(`failed to load proposal evidence: %w`, err)
 	}
@@ -245,7 +344,11 @@ func (s *Store) hydrateProposals(ctx context.Context, ps []*mecp.Proposal) error
 // DeleteProposal removes a proposal and its evidence permanently.
 func (s *Store) DeleteProposal(ctx context.Context, id string) error {
 	return s.withTx(ctx, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, `DELETE FROM proposals WHERE id = ?`, id)
+		statement, err := deleteWhere(proposalsTable, query.Equal(proposalID, id))
+		if err != nil {
+			return fmt.Errorf(`failed to build the proposal delete: %w`, err)
+		}
+		res, err := execWrite(ctx, tx, statement)
 		if err != nil {
 			return fmt.Errorf(`failed to delete proposal %s: %w`, id, err)
 		}
@@ -258,7 +361,11 @@ func (s *Store) DeleteProposal(ctx context.Context, id string) error {
 		}
 		// proposal_sources cascades, but the cascade only fires with foreign
 		// keys on, so the evidence is removed explicitly too.
-		_, err = tx.ExecContext(ctx, `DELETE FROM proposal_sources WHERE proposal_id = ?`, id)
+		evidence, err := deleteWhere(proposalSourcesTable, query.Equal(proposalEvidenceID, id))
+		if err != nil {
+			return fmt.Errorf(`failed to build the proposal evidence delete: %w`, err)
+		}
+		_, err = execWrite(ctx, tx, evidence)
 		return err
 	})
 }

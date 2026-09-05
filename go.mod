@@ -6,6 +6,7 @@ require (
 	github.com/goccy/go-yaml v1.19.2
 	github.com/google/jsonschema-go v0.4.3
 	github.com/lestrrat-go/option/v3 v3.0.0-alpha1
+	github.com/lestrrat-go/rasql v0.0.0-20260905014932-72db98c52453
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/stretchr/testify v1.12.1
 	github.com/urfave/cli/v3 v3.11.0

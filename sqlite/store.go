@@ -13,7 +13,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/lestrrat-ai/mecp"
@@ -208,14 +207,6 @@ func parseTimePtr(s sql.NullString) (*time.Time, error) {
 		return nil, err
 	}
 	return &t, nil
-}
-
-// placeholders renders "?, ?, ?" for an IN clause of n values.
-func placeholders(n int) string {
-	if n <= 0 {
-		return ""
-	}
-	return strings.TrimSuffix(strings.Repeat("?,", n), ",")
 }
 
 var _ mecp.Store = (*Store)(nil)

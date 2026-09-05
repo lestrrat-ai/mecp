@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/lestrrat-ai/mecp"
+	"github.com/lestrrat-go/rasql/query"
 )
 
 // AuditSink writes audit events into the database. It is an alternative to
@@ -24,10 +25,18 @@ func (a *AuditSink) Write(ctx context.Context, ev mecp.AuditEvent) error {
 	if err != nil {
 		return fmt.Errorf(`failed to encode audit event: %w`, err)
 	}
-	_, err = a.store.db.ExecContext(ctx,
-		`INSERT INTO audit_events (at, principal_id, client_id, operation, payload) VALUES (?,?,?,?,?)`,
-		formatTime(ev.At), ev.PrincipalID, ev.ClientID, ev.Operation, string(payload))
+	// id is left out so SQLite assigns the next autoincrement value.
+	insert, err := query.NewInsert(auditEventsTable,
+		query.Set(auditEventsTable.Column("at"), formatTime(ev.At)),
+		query.Set(auditEventsTable.Column("principal_id"), ev.PrincipalID),
+		query.Set(auditEventsTable.Column("client_id"), ev.ClientID),
+		query.Set(auditEventsTable.Column("operation"), ev.Operation),
+		query.Set(auditEventsTable.Column("payload"), string(payload)),
+	)
 	if err != nil {
+		return fmt.Errorf(`failed to build the audit insert: %w`, err)
+	}
+	if _, err := execWrite(ctx, a.store.db, insert); err != nil {
 		return fmt.Errorf(`failed to write audit event: %w`, err)
 	}
 	return nil
@@ -40,16 +49,22 @@ func (s *Store) AuditEvents(ctx context.Context, q mecp.AuditQuery) ([]mecp.Audi
 		limit = mecp.DefaultAuditLimit
 	}
 
-	query := `SELECT payload FROM audit_events`
-	args := []any{}
+	var where query.Expression
 	if !q.Since.IsZero() {
-		query += ` WHERE at >= ?`
-		args = append(args, formatTime(q.Since))
+		where = query.GreaterThanOrEqual(auditEventsTable.Column("at"), formatTime(q.Since))
 	}
-	query += ` ORDER BY id DESC LIMIT ?`
-	args = append(args, limit)
+	statement, err := selectWhere(auditEventsTable, where, auditEventsTable.Column("payload"))
+	if err != nil {
+		return nil, fmt.Errorf(`failed to build the audit query: %w`, err)
+	}
+	if statement, err = statement.WithOrder(query.Desc(auditEventsTable.Column("id"))); err != nil {
+		return nil, fmt.Errorf(`failed to order the audit query: %w`, err)
+	}
+	if statement, err = statement.WithLimit(limit); err != nil {
+		return nil, fmt.Errorf(`failed to limit the audit query: %w`, err)
+	}
 
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := querySelect(ctx, s.db, statement)
 	if err != nil {
 		return nil, fmt.Errorf(`failed to read audit events: %w`, err)
 	}
