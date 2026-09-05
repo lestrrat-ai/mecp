@@ -1,0 +1,33 @@
+version: "2"
+
+# The linter set is golangci-lint's default. The blocks below only narrow
+# errcheck and turn on a formatter; no extra linters are enabled.
+linters:
+  settings:
+    errcheck:
+      # Each entry is a close or rollback that runs in a defer after the work
+      # it protects is already finished or already failed. The error has
+      # nowhere left to go at that point. Writes whose close error can still
+      # mean lost data are checked in the code instead of listed here.
+      exclude-functions:
+        - (*database/sql.DB).Close
+        - (*database/sql.Rows).Close
+        - (*database/sql.Tx).Rollback
+        - (*github.com/lestrrat-ai/mecp/sqlite.Store).Close
+        - (*github.com/lestrrat-ai/mecp/cmd/mecp.runtime).Close
+  exclusions:
+    rules:
+      # Tests close and delete their fixtures from t.Cleanup, which runs after
+      # the test it would report to has already finished.
+      - path: _test\.go
+        linters:
+          - errcheck
+
+formatters:
+  enable:
+    - gofmt
+
+issues:
+  # Report every unformatted file. The default caps repeats of one message at
+  # three, which would hide the tail of exactly this kind of sweep.
+  max-same-issues: 0

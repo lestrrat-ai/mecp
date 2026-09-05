@@ -183,7 +183,9 @@ func runAudit(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 	if closer != nil {
-		defer closer()
+		// This command only reads the trail, so a close error has no bearing
+		// on what it printed.
+		defer func() { _ = closer() }()
 	}
 	if reader == nil {
 		fmt.Fprintf(os.Stderr, "auditing is off; set audit to \"jsonl\" or \"sqlite\" in %s\n", cfg.Path())
