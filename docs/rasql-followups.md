@@ -47,8 +47,9 @@ entirely, because nothing reaches them except `migrate/diff/postgresql` and
 
 So the argument is consistency with `migrate/diff`, plus not linking a parser
 into a binary that cannot run it. It is not a build-weight argument, and mecp
-is SQLite-only, so mecp would want that one module regardless. This is worth
-raising upstream on its own merits rather than for anything mecp needs.
+is SQLite-only, so the one module it would ever pull is the one it could use.
+This is worth raising upstream on its own merits rather than for anything mecp
+needs.
 
 ## Reading the schema drift test through `catalog`
 
@@ -65,11 +66,26 @@ reason no longer holds.
 
 `catalog` is the better source on the merits: it returns full `schema.TableDef`
 values, so the test could assert column types, primary keys, and unique
-constraints instead of only column names. Two things to check before switching:
+constraints instead of only column names.
 
-- `catalog` reads base tables only, so `records_fts` stays outside it. That
-  table is an FTS5 virtual table, and it still needs the pragma or a plain
-  select of its declared columns.
-- `catalog.FromDatabase` begins its read in a transaction at
-  `sql.LevelRepeatableRead`. modernc's driver may refuse that isolation level,
-  in which case `catalog.FromQueryer` is the documented fallback.
+Two worries recorded here earlier were both wrong, checked by running
+`catalog.FromDatabase` against an in-memory database holding mecp's own
+`records_fts` DDL.
+
+- The isolation level is not a problem. `FromDatabase` begins its read at
+  `sql.LevelRepeatableRead`, and modernc accepts it silently, because
+  `newTx` in `modernc.org/sqlite/tx.go` reads only `opts.ReadOnly` and ignores
+  `opts.Isolation` entirely. `FromQueryer` is not needed.
+- `records_fts` is reachable, but its column list differs. A sweep with an
+  empty `Include` skips it, as inspection enumerates base tables only. Naming
+  it in `Include` does describe it, and it comes back with eight columns rather
+  than six: rasql's SQLite path reads `PRAGMA table_xinfo`, which exposes the
+  hidden `records_fts` and `rank` columns that FTS5 adds, where
+  `pragma_table_info` reports only the six declared ones.
+
+What is left to decide is a real cost rather than a blocker. mecp's `go.mod`
+does not require `rasql-sqlite` today, and `catalog` would appear only in
+`sqlite/tables_test.go`, so switching adds a module the shipped binary never
+links. Weigh that against the wider assertions the switch buys. Either way the
+FTS5 table needs the pragma or a filter, since the descriptions in `tables.go`
+name the six declared columns and not the two hidden ones.
