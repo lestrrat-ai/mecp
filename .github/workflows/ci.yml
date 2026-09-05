@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  # pull_request is what covers a PR from a fork: its pushes land in the fork,
+  # so they never trigger anything here. push is narrowed to main so a
+  # same-repo PR does not run this twice.
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # go-version-file keeps the toolchain tied to go.mod. The module needs
+      # the version go.mod names, so there is nothing older to matrix over.
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          check-latest: true
+      # The sqlite driver is modernc.org/sqlite, which is pure Go, so this
+      # job needs no C toolchain and no database service.
+      - name: Run tests
+        run: go test -race -cover ./...
+      - name: Run go vet
+        run: go vet ./...
+      - name: Check go.mod and go.sum are tidy
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          check-latest: true
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          args: ./...
