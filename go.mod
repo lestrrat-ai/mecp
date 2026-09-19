@@ -9,7 +9,7 @@ require (
 	github.com/lestrrat-go/rasql v0.0.0-20260905014932-72db98c52453
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/stretchr/testify v1.12.1
-	github.com/urfave/cli/v3 v3.11.0
+	github.com/urfave/cli/v3 v3.12.0
 	modernc.org/sqlite v1.58.0
 )
 
